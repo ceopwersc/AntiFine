@@ -27,6 +27,11 @@ from src.scanners.baseline_audit import (  # noqa: E402
     record_findings,
     run_port_mapper,
 )
+from src.scanners.ssrf_scanner import (  # noqa: E402
+    SSRFScannerError,
+    run_web_audit,
+)
+from src.scanners.ssrf_scanner import format_summary as format_web_summary  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -50,6 +55,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run the baseline local audit: map listening ports and flag "
              "insecure or plaintext services.",
+    )
+    parser.add_argument(
+        "--audit-web",
+        metavar="URL",
+        help="Run the SSRF/web scanner against the given target URL. The URL "
+             "should include query parameters to fuzz, e.g. "
+             "'http://host/api?url=test'.",
     )
     parser.add_argument(
         "--target-id",
@@ -111,6 +123,27 @@ def run_audit_local(target_id: int = 1, dry_run: bool = False) -> int:
     return 0
 
 
+def run_audit_web(target_url: str, target_id: int = 1, dry_run: bool = False) -> int:
+    """Run the SSRF/web scanner against a target URL and report findings."""
+    try:
+        findings = run_web_audit(
+            target_url, target_id=target_id, persist=not dry_run
+        )
+    except SSRFScannerError as exc:
+        print(f"[error] Web audit failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(format_web_summary(target_url, findings))
+    if dry_run:
+        print("[info] Dry run: no rows written to the database.")
+    else:
+        print(
+            f"[ok] Recorded {len(findings)} SSRF finding(s) "
+            f"against target_id={target_id}."
+        )
+    return 0
+
+
 def run_report() -> int:
     """Generate the Markdown compliance report."""
     try:
@@ -128,7 +161,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    if not (args.init or args.audit or args.audit_local or args.report):
+    if not (
+        args.init or args.audit or args.audit_local or args.audit_web or args.report
+    ):
         parser.print_help()
         return 0
 
@@ -139,6 +174,12 @@ def main(argv: list[str] | None = None) -> int:
             return exit_code
     if args.audit_local:
         exit_code = run_audit_local(target_id=args.target_id, dry_run=args.dry_run)
+        if exit_code != 0:
+            return exit_code
+    if args.audit_web:
+        exit_code = run_audit_web(
+            args.audit_web, target_id=args.target_id, dry_run=args.dry_run
+        )
         if exit_code != 0:
             return exit_code
     if args.audit:

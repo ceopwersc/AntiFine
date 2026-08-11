@@ -34,7 +34,12 @@
       "PowerShell(python -m pytest tests/test_integration.py -v)",
       "Bash(cd /c/AntiFineV2 *)",
       "PowerShell(python -m pytest tests/test_integration.py -q 2>&1)",
-      "PowerShell(python src/main.py --init)"
+      "PowerShell(python src/main.py --init)",
+      "PowerShell(git -C C:\\\\AntiFine\\\\AntiFine status --short)",
+      "PowerShell(git -C C:\\\\AntiFine\\\\AntiFine log --oneline -5)",
+      "PowerShell(git -C C:\\\\AntiFine\\\\AntiFine remote -v)",
+      "Bash(python -c \"import sys; print\\(sys.version\\)\")",
+      "Bash(python -c \"import requests; print\\('requests', requests.__version__\\)\")"
     ]
   }
 }
