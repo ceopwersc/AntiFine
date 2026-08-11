@@ -11,8 +11,8 @@
 - `run-tests`: `pytest tests/`
 - `init-db`: `python3 database/setup.py`
 ## Version Control Rules
-- After successfully completing a build step or fixing a bug, and ensuring all tests pass, you MUST automatically commit and push the code to GitHub.
-- Use the following commands:
-  1. `git add .`
-  2. `git commit -m "Auto-commit: [Brief description of what you just built]"`
-  3. `git push origin main`
+- After successfully completing a build step and ensuring all tests pass, commit your work automatically, but DO NOT use `git add .`.
+- Only add the specific files you explicitly created or modified during that step (e.g., `git add src/main.py tests/test_main.py`).
+- Use a descriptive commit message: `git commit -m "Auto-commit: [Specific description]"`
+- Push to the repository: `git push origin main`
+- NEVER commit configuration files, `.env` files, or local database states unless I explicitly authorize it.
