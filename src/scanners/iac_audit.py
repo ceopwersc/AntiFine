@@ -5,6 +5,7 @@ Parses Dockerfiles and Kubernetes YAML manifests to detect common configuration 
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -59,6 +60,23 @@ def analyze_kubernetes(content: str, filename: str) -> list[tuple[str, str]]:
         
     return findings
 
+def analyze_terraform(content: str, filename: str) -> list[tuple[str, str]]:
+    """Scan a Terraform file for vulnerabilities using string/regex matching."""
+    findings = []
+    
+    # Match acl = "public-read" or acl = "public-read-write"
+    # To avoid matching commented lines, we could be strict, but simple regex works for this scope.
+    lines = content.splitlines()
+    for line in lines:
+        line = line.strip()
+        if line.startswith("#") or line.startswith("//"):
+            continue
+            
+        if re.search(r'acl\s*=\s*"(public-read|public-read-write)"', line):
+            findings.append((f"Insecure S3 Bucket ACL (Public) in {filename}", "HIGH"))
+            
+    return findings
+
 def scan_file(filepath: Path) -> list[tuple[str, str]]:
     """Scan a single file based on its name."""
     try:
@@ -77,6 +95,8 @@ def scan_file(filepath: Path) -> list[tuple[str, str]]:
         return analyze_dockerfile(content, filename)
     elif filename.endswith(".yaml") or filename.endswith(".yml"):
         return analyze_kubernetes(content, filename)
+    elif filename.endswith(".tf"):
+        return analyze_terraform(content, filename)
     
     return []
 
@@ -93,7 +113,7 @@ def run_iac_audit(target_path: str, db_path: Path = DB_PATH, target_id: int = 1,
     elif path.is_dir():
         for filepath in path.rglob("*"):
             if filepath.is_file():
-                if "Dockerfile" in filepath.name or filepath.name.endswith(".yaml") or filepath.name.endswith(".yml"):
+                if "Dockerfile" in filepath.name or filepath.name.endswith(".yaml") or filepath.name.endswith(".yml") or filepath.name.endswith(".tf"):
                     all_findings.extend(scan_file(filepath))
                     
     if persist and all_findings:
