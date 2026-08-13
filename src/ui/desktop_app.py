@@ -157,7 +157,7 @@ class SeverityPill(ctk.CTkFrame):
 
     def __init__(self, master, text: str, color: str, **kw):
         super().__init__(
-            master, corner_radius=6, fg_color=color + "22",
+            master, corner_radius=6, fg_color="#1A1A2E",
             border_color=color, border_width=1, **kw,
         )
         lbl = ctk.CTkLabel(
@@ -242,7 +242,7 @@ class AntiFineApp(ctk.CTk):
         # Status pill
         status_frame = ctk.CTkFrame(
             hdr, corner_radius=10,
-            fg_color=CLR_SAFE + "18", border_color=CLR_SAFE, border_width=1,
+            fg_color="#0D2818", border_color=CLR_SAFE, border_width=1,
         )
         status_frame.grid(row=0, column=1, padx=0, pady=12, sticky="e")
 
