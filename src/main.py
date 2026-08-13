@@ -22,6 +22,7 @@ from src.reporting.generate import ReportError, generate_report  # noqa: E402
 from src.reporting.sarif_exporter import export_to_sarif  # noqa: E402
 from src.scanners.iac_audit import IaCScannerError, run_iac_audit  # noqa: E402
 from src.ui.dashboard import interactive_loop  # noqa: E402
+from src.ui.desktop_app import launch_gui  # noqa: E402
 from src.scanners.baseline_audit import (  # noqa: E402
     ScannerError,
     format_summary,
@@ -96,6 +97,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--ui",
         action="store_true",
         help="Launch the interactive Rich TUI dashboard.",
+    )
+    parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="Launch the native CustomTkinter desktop interface.",
     )
     return parser
 
@@ -197,6 +203,10 @@ def main(argv: list[str] | None = None) -> int:
     """Parse arguments and dispatch to the requested action."""
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.gui:
+        launch_gui()
+        return 0
 
     if args.ui:
         return interactive_loop()
