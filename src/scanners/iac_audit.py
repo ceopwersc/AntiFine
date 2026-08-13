@@ -63,6 +63,11 @@ def scan_file(filepath: Path) -> list[tuple[str, str]]:
     """Scan a single file based on its name."""
     try:
         content = filepath.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        try:
+            content = filepath.read_text(encoding="utf-16")
+        except UnicodeDecodeError:
+            content = filepath.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         print(f"[warning] Could not read {filepath}: {exc}", file=sys.stderr)
         return []
