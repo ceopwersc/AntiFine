@@ -1,7 +1,7 @@
-"""AntiFine Native Desktop Application.
+"""AntiFine Native Desktop Application — Premium UI.
 
-A modern dark-themed Windows desktop GUI built with CustomTkinter.
-Provides visual dashboard, audit controls, and report generation.
+A high-end, commercial-grade cybersecurity dashboard built with CustomTkinter.
+Dark-themed with precise color tokens, typography hierarchy, and polished layout.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ import sqlite3
 import sys
 import threading
 from contextlib import redirect_stdout, redirect_stderr
+from datetime import datetime, timezone
 from pathlib import Path
 
 import customtkinter as ctk
@@ -21,31 +22,80 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from database.setup import DB_PATH, initialize_database  # noqa: E402
 
-# ── Appearance ──────────────────────────────────────────────────────────────
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  DESIGN TOKENS                                                         ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+
+# Backgrounds
+BG_ROOT       = "#090D16"
+BG_SIDEBAR    = "#0B1120"
+BG_CARD       = "#111827"
+BG_INPUT      = "#030712"
+BG_HOVER      = "#1E293B"
+BG_ACTIVE     = "#1E293B"
+BG_CONSOLE    = "#030712"
+
+# Borders
+BORDER_SUBTLE = "#1F2937"
+BORDER_ACCENT = "#6366F1"
+
+# Accents
+ACCENT_INDIGO = "#6366F1"
+ACCENT_CYAN   = "#06B6D4"
+
+# Severity palette
+CLR_CRITICAL  = "#F43F5E"
+CLR_HIGH      = "#F43F5E"
+CLR_MEDIUM    = "#FBBF24"
+CLR_LOW       = "#38BDF8"
+CLR_SAFE      = "#34D399"
+
+SEVERITY_COLORS = {
+    "CRITICAL": CLR_CRITICAL,
+    "HIGH":     CLR_HIGH,
+    "MEDIUM":   CLR_MEDIUM,
+    "LOW":      CLR_LOW,
+    "INFO":     "#94A3B8",
+}
+
+# Text colors
+TXT_PRIMARY   = "#F1F5F9"
+TXT_SECONDARY = "#94A3B8"
+TXT_MUTED     = "#9CA3AF"
+TXT_DIM       = "#64748B"
+
+# Typography
+FONT_FAMILY   = "Segoe UI"
+FONT_H1       = (FONT_FAMILY, 22, "bold")
+FONT_H2       = (FONT_FAMILY, 16, "bold")
+FONT_H3       = (FONT_FAMILY, 14, "bold")
+FONT_BODY     = (FONT_FAMILY, 12)
+FONT_SMALL    = (FONT_FAMILY, 11)
+FONT_MONO     = ("Consolas", 12)
+FONT_MONO_SM  = ("Consolas", 11)
+
+# Dimensions
+SIDEBAR_W     = 200
+CARD_RADIUS   = 12
+BTN_RADIUS    = 8
+
+# CTk global
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-SEVERITY_COLORS = {
-    "CRITICAL": "#e74c3c",
-    "HIGH":     "#e67e22",
-    "MEDIUM":   "#f1c40f",
-    "LOW":      "#3498db",
-    "INFO":     "#95a5a6",
-}
 
-
-# ── Helpers ─────────────────────────────────────────────────────────────────
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  DATA LAYER                                                            ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
 
 def _fetch_severity_counts(db_path: Path = DB_PATH) -> dict[str, int]:
-    """Return {severity: count} from the audit database."""
-    counts: dict[str, int] = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0}
+    counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0}
     if not db_path.is_file():
         return counts
     try:
         with sqlite3.connect(db_path) as conn:
             rows = conn.execute(
-                "SELECT UPPER(severity) AS sev, COUNT(*) "
-                "FROM scan_results GROUP BY sev"
+                "SELECT UPPER(severity) AS sev, COUNT(*) FROM scan_results GROUP BY sev"
             ).fetchall()
         for sev, cnt in rows:
             if sev in counts:
@@ -56,7 +106,6 @@ def _fetch_severity_counts(db_path: Path = DB_PATH) -> dict[str, int]:
 
 
 def _fetch_all_findings(db_path: Path = DB_PATH) -> list[tuple]:
-    """Return all findings as a list of tuples."""
     if not db_path.is_file():
         return []
     try:
@@ -69,355 +118,600 @@ def _fetch_all_findings(db_path: Path = DB_PATH) -> list[tuple]:
         return []
 
 
-# ── Severity Card Widget ───────────────────────────────────────────────────
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  WIDGETS                                                               ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
 
-class SeverityCard(ctk.CTkFrame):
-    """A single dashboard card showing a severity count."""
+class MetricCard(ctk.CTkFrame):
+    """Hero metric card with a colored top indicator line."""
 
-    def __init__(self, master, label: str, count: int, color: str, **kw):
-        super().__init__(master, corner_radius=12, fg_color="#1e1e2e", **kw)
-
+    def __init__(self, master, label: str, value: int, accent: str, **kw):
+        super().__init__(
+            master, corner_radius=CARD_RADIUS,
+            fg_color=BG_CARD, border_color=BORDER_SUBTLE, border_width=1,
+            **kw,
+        )
         self.grid_columnconfigure(0, weight=1)
 
-        count_label = ctk.CTkLabel(
-            self, text=str(count), font=ctk.CTkFont(size=42, weight="bold"),
+        # Top accent line
+        bar = ctk.CTkFrame(self, height=3, corner_radius=0, fg_color=accent)
+        bar.grid(row=0, column=0, sticky="new", padx=1, pady=(1, 0))
+
+        val_lbl = ctk.CTkLabel(
+            self, text=str(value),
+            font=ctk.CTkFont(family=FONT_FAMILY, size=36, weight="bold"),
+            text_color=accent,
+        )
+        val_lbl.grid(row=1, column=0, padx=20, pady=(18, 0))
+
+        name_lbl = ctk.CTkLabel(
+            self, text=label,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12),
+            text_color=TXT_MUTED,
+        )
+        name_lbl.grid(row=2, column=0, padx=20, pady=(2, 18))
+
+
+class SeverityPill(ctk.CTkFrame):
+    """A small rounded pill badge with severity color."""
+
+    def __init__(self, master, text: str, color: str, **kw):
+        super().__init__(
+            master, corner_radius=6, fg_color=color + "22",
+            border_color=color, border_width=1, **kw,
+        )
+        lbl = ctk.CTkLabel(
+            self, text=text,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
             text_color=color,
         )
-        count_label.grid(row=0, column=0, padx=20, pady=(15, 0))
+        lbl.grid(padx=10, pady=2)
 
-        name_label = ctk.CTkLabel(
-            self, text=label, font=ctk.CTkFont(size=14),
-            text_color="#a0a0b0",
+
+class NavButton(ctk.CTkButton):
+    """Sidebar navigation button with accent-left-pill highlight."""
+
+    def __init__(self, master, text: str, command=None, **kw):
+        super().__init__(
+            master, text=text, command=command,
+            fg_color="transparent", hover_color=BG_HOVER,
+            anchor="w", corner_radius=BTN_RADIUS,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=14),
+            text_color=TXT_SECONDARY, height=42,
+            **kw,
         )
-        name_label.grid(row=1, column=0, padx=20, pady=(0, 15))
+
+    def set_active(self, active: bool):
+        if active:
+            self.configure(fg_color=BG_ACTIVE, text_color=TXT_PRIMARY)
+        else:
+            self.configure(fg_color="transparent", text_color=TXT_SECONDARY)
 
 
-# ── Main Application ──────────────────────────────────────────────────────
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  MAIN APPLICATION                                                      ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
 
 class AntiFineApp(ctk.CTk):
-    """Root window and layout manager."""
+    """Root window and layout orchestrator."""
 
     def __init__(self):
         super().__init__()
 
-        # ── Window ──────────────────────────────────────────────────────
-        self.title("AntiFine - Security Auditor")
+        self.title("AntiFine — Security Auditor")
         self.geometry("950x650")
-        self.minsize(800, 500)
+        self.minsize(850, 550)
+        self.configure(fg_color=BG_ROOT)
 
-        # ── Grid layout: sidebar + content area ─────────────────────────
-        self.grid_rowconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
         self.grid_columnconfigure(1, weight=1)
 
-        # ── Sidebar ─────────────────────────────────────────────────────
-        self.sidebar = ctk.CTkFrame(self, width=200, corner_radius=0, fg_color="#12121a")
-        self.sidebar.grid(row=0, column=0, sticky="nsew")
-        self.sidebar.grid_rowconfigure(6, weight=1)
-
-        logo = ctk.CTkLabel(
-            self.sidebar, text="🛡️ AntiFine",
-            font=ctk.CTkFont(size=22, weight="bold"),
-        )
-        logo.grid(row=0, column=0, padx=20, pady=(25, 5))
-
-        subtitle = ctk.CTkLabel(
-            self.sidebar, text="Security Auditor",
-            font=ctk.CTkFont(size=12), text_color="#7a7a8a",
-        )
-        subtitle.grid(row=1, column=0, padx=20, pady=(0, 25))
-
-        self.btn_dashboard = ctk.CTkButton(
-            self.sidebar, text="📊  Dashboard", command=self.show_dashboard,
-            fg_color="transparent", hover_color="#2a2a3a",
-            anchor="w", font=ctk.CTkFont(size=14),
-        )
-        self.btn_dashboard.grid(row=2, column=0, padx=10, pady=5, sticky="ew")
-
-        self.btn_audits = ctk.CTkButton(
-            self.sidebar, text="🔍  Run Audits", command=self.show_audits,
-            fg_color="transparent", hover_color="#2a2a3a",
-            anchor="w", font=ctk.CTkFont(size=14),
-        )
-        self.btn_audits.grid(row=3, column=0, padx=10, pady=5, sticky="ew")
-
-        self.btn_reports = ctk.CTkButton(
-            self.sidebar, text="📄  Reports", command=self.show_reports,
-            fg_color="transparent", hover_color="#2a2a3a",
-            anchor="w", font=ctk.CTkFont(size=14),
-        )
-        self.btn_reports.grid(row=4, column=0, padx=10, pady=5, sticky="ew")
-
-        version_label = ctk.CTkLabel(
-            self.sidebar, text="v1.0.0", text_color="#555566",
-            font=ctk.CTkFont(size=11),
-        )
-        version_label.grid(row=7, column=0, padx=20, pady=(0, 15))
-
-        # ── Content area ────────────────────────────────────────────────
-        self.content = ctk.CTkFrame(self, corner_radius=0, fg_color="#16161e")
-        self.content.grid(row=0, column=1, sticky="nsew")
-        self.content.grid_rowconfigure(0, weight=1)
-        self.content.grid_columnconfigure(0, weight=1)
-
-        # Initialize the database silently
         try:
             initialize_database()
         except Exception:
             pass
 
+        self._build_header()
+        self._build_sidebar()
+
+        # Content container
+        self.content = ctk.CTkFrame(self, corner_radius=0, fg_color=BG_ROOT)
+        self.content.grid(row=1, column=1, sticky="nsew")
+        self.content.grid_rowconfigure(0, weight=1)
+        self.content.grid_columnconfigure(0, weight=1)
+
         self.show_dashboard()
 
-    # ── View helpers ────────────────────────────────────────────────────
+    # ── Header ──────────────────────────────────────────────────────────
+
+    def _build_header(self):
+        hdr = ctk.CTkFrame(
+            self, height=50, corner_radius=0,
+            fg_color=BG_SIDEBAR, border_color=BORDER_SUBTLE, border_width=1,
+        )
+        hdr.grid(row=0, column=0, columnspan=2, sticky="new")
+        hdr.grid_columnconfigure(1, weight=1)
+
+        logo = ctk.CTkLabel(
+            hdr, text="🛡️  ANTIFINE",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=18, weight="bold"),
+            text_color=ACCENT_INDIGO,
+        )
+        logo.grid(row=0, column=0, padx=20, pady=12, sticky="w")
+
+        # Status pill
+        status_frame = ctk.CTkFrame(
+            hdr, corner_radius=10,
+            fg_color=CLR_SAFE + "18", border_color=CLR_SAFE, border_width=1,
+        )
+        status_frame.grid(row=0, column=1, padx=0, pady=12, sticky="e")
+
+        status_lbl = ctk.CTkLabel(
+            status_frame, text="●  ENGINE ONLINE",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
+            text_color=CLR_SAFE,
+        )
+        status_lbl.grid(padx=14, pady=4)
+
+        # Refresh button
+        self.refresh_btn = ctk.CTkButton(
+            hdr, text="⟳  Refresh", width=90, height=30,
+            corner_radius=BTN_RADIUS,
+            fg_color=ACCENT_INDIGO, hover_color="#4F46E5",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
+            command=self._refresh_current_view,
+        )
+        self.refresh_btn.grid(row=0, column=2, padx=(10, 20), pady=12, sticky="e")
+
+    # ── Sidebar ─────────────────────────────────────────────────────────
+
+    def _build_sidebar(self):
+        sb = ctk.CTkFrame(
+            self, width=SIDEBAR_W, corner_radius=0,
+            fg_color=BG_SIDEBAR, border_color=BORDER_SUBTLE, border_width=1,
+        )
+        sb.grid(row=1, column=0, sticky="nsew")
+        sb.grid_rowconfigure(5, weight=1)
+        sb.grid_propagate(False)
+
+        pad_y = 4
+        self.nav_btns: list[NavButton] = []
+
+        self.btn_dash = NavButton(sb, text="📊  Overview Dashboard", command=self.show_dashboard)
+        self.btn_dash.grid(row=0, column=0, padx=10, pady=(20, pad_y), sticky="ew")
+        self.nav_btns.append(self.btn_dash)
+
+        self.btn_scan = NavButton(sb, text="🛡️  Vulnerability Scanner", command=self.show_scanner)
+        self.btn_scan.grid(row=1, column=0, padx=10, pady=pad_y, sticky="ew")
+        self.nav_btns.append(self.btn_scan)
+
+        self.btn_rpt = NavButton(sb, text="📄  Reports & SARIF", command=self.show_reports)
+        self.btn_rpt.grid(row=2, column=0, padx=10, pady=pad_y, sticky="ew")
+        self.nav_btns.append(self.btn_rpt)
+
+        # Bottom branding
+        ver = ctk.CTkLabel(
+            sb, text="v1.0.0  ·  AntiFine Engine",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=10),
+            text_color=TXT_DIM,
+        )
+        ver.grid(row=6, column=0, padx=10, pady=(0, 14))
+
+    # ── Helpers ─────────────────────────────────────────────────────────
 
     def _clear_content(self):
-        for widget in self.content.winfo_children():
-            widget.destroy()
+        for w in self.content.winfo_children():
+            w.destroy()
 
-    def _highlight_button(self, active: ctk.CTkButton):
-        for btn in (self.btn_dashboard, self.btn_audits, self.btn_reports):
-            btn.configure(fg_color="transparent")
-        active.configure(fg_color="#2a2a3a")
+    def _activate_nav(self, active: NavButton):
+        for btn in self.nav_btns:
+            btn.set_active(btn is active)
 
-    # ── Dashboard View ──────────────────────────────────────────────────
+    def _refresh_current_view(self):
+        # Re-render whichever view is active
+        for btn in self.nav_btns:
+            if btn.cget("fg_color") == BG_ACTIVE:
+                btn.invoke()
+                return
+        self.show_dashboard()
+
+    # ╔══════════════════════════════════════════════════════════════════╗
+    # ║  DASHBOARD VIEW                                                 ║
+    # ╚══════════════════════════════════════════════════════════════════╝
 
     def show_dashboard(self):
         self._clear_content()
-        self._highlight_button(self.btn_dashboard)
+        self._activate_nav(self.btn_dash)
 
-        header = ctk.CTkLabel(
-            self.content, text="Security Dashboard",
-            font=ctk.CTkFont(size=24, weight="bold"),
-        )
-        header.grid(row=0, column=0, columnspan=4, padx=30, pady=(25, 20), sticky="w")
+        wrapper = ctk.CTkScrollableFrame(self.content, fg_color=BG_ROOT, corner_radius=0)
+        wrapper.grid(row=0, column=0, sticky="nsew")
+        wrapper.grid_columnconfigure(0, weight=1)
+
+        # Section title
+        ctk.CTkLabel(
+            wrapper, text="Overview Dashboard",
+            font=ctk.CTkFont(*FONT_H1), text_color=TXT_PRIMARY, anchor="w",
+        ).grid(row=0, column=0, columnspan=4, padx=30, pady=(28, 4), sticky="w")
+
+        ctk.CTkLabel(
+            wrapper, text="Real-time visibility into your security posture",
+            font=ctk.CTkFont(*FONT_BODY), text_color=TXT_MUTED, anchor="w",
+        ).grid(row=1, column=0, columnspan=4, padx=30, pady=(0, 18), sticky="w")
+
+        # ── Metric cards ────────────────────────────────────────────────
+        cards_row = ctk.CTkFrame(wrapper, fg_color="transparent")
+        cards_row.grid(row=2, column=0, columnspan=4, padx=25, sticky="ew")
+        for i in range(4):
+            cards_row.grid_columnconfigure(i, weight=1)
 
         counts = _fetch_severity_counts()
-
-        cards_frame = ctk.CTkFrame(self.content, fg_color="transparent")
-        cards_frame.grid(row=1, column=0, columnspan=4, padx=25, pady=5, sticky="ew")
-        for i in range(5):
-            cards_frame.grid_columnconfigure(i, weight=1)
-
-        for col, (sev, cnt) in enumerate(counts.items()):
-            card = SeverityCard(
-                cards_frame, label=sev, count=cnt,
-                color=SEVERITY_COLORS.get(sev, "#ffffff"),
+        card_defs = [
+            ("CRITICAL", counts["CRITICAL"], CLR_CRITICAL),
+            ("HIGH",     counts["HIGH"],     CLR_HIGH),
+            ("MEDIUM",   counts["MEDIUM"],   CLR_MEDIUM),
+            ("LOW",      counts["LOW"],      CLR_LOW),
+        ]
+        for col, (label, val, clr) in enumerate(card_defs):
+            MetricCard(cards_row, label=label, value=val, accent=clr).grid(
+                row=0, column=col, padx=6, pady=4, sticky="nsew",
             )
-            card.grid(row=0, column=col, padx=8, pady=5, sticky="nsew")
 
-        # Findings table
-        table_label = ctk.CTkLabel(
-            self.content, text="Recent Findings",
-            font=ctk.CTkFont(size=16, weight="bold"),
+        # ── Recent findings table ──────────────────────────────────────
+        ctk.CTkLabel(
+            wrapper, text="Recent Findings",
+            font=ctk.CTkFont(*FONT_H2), text_color=TXT_PRIMARY, anchor="w",
+        ).grid(row=3, column=0, padx=30, pady=(24, 8), sticky="w")
+
+        table_outer = ctk.CTkFrame(
+            wrapper, fg_color=BG_CARD,
+            corner_radius=CARD_RADIUS, border_color=BORDER_SUBTLE, border_width=1,
         )
-        table_label.grid(row=2, column=0, padx=30, pady=(25, 5), sticky="w")
+        table_outer.grid(row=4, column=0, columnspan=4, padx=25, pady=(0, 20), sticky="ew")
+        table_outer.grid_columnconfigure(0, weight=1)
 
-        table_frame = ctk.CTkScrollableFrame(
-            self.content, fg_color="#1e1e2e", corner_radius=10,
-        )
-        table_frame.grid(row=3, column=0, columnspan=4, padx=25, pady=5, sticky="nsew")
-        self.content.grid_rowconfigure(3, weight=1)
-
-        # Column headers
-        headers = ["ID", "Target", "Vulnerability", "Severity", "Status"]
-        for col, hdr in enumerate(headers):
-            lbl = ctk.CTkLabel(
-                table_frame, text=hdr,
-                font=ctk.CTkFont(size=12, weight="bold"),
-                text_color="#8888aa",
-            )
-            lbl.grid(row=0, column=col, padx=10, pady=(8, 4), sticky="w")
-            table_frame.grid_columnconfigure(col, weight=1 if col == 2 else 0)
+        # Headers
+        hdr_frame = ctk.CTkFrame(table_outer, fg_color=BG_INPUT, corner_radius=0)
+        hdr_frame.grid(row=0, column=0, sticky="ew", padx=1, pady=(1, 0))
+        headers = ["ID", "Target", "Vulnerability", "Severity", "Status", "Detected"]
+        col_weights = [0, 0, 1, 0, 0, 0]
+        for c, (h, w) in enumerate(zip(headers, col_weights)):
+            hdr_frame.grid_columnconfigure(c, weight=w)
+            ctk.CTkLabel(
+                hdr_frame, text=h,
+                font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
+                text_color=TXT_DIM, anchor="w",
+            ).grid(row=0, column=c, padx=14, pady=8, sticky="w")
 
         findings = _fetch_all_findings()
-        for row_idx, f in enumerate(findings, start=1):
+        for r, f in enumerate(findings, start=1):
             fid, tid, vuln, sev, status, ts = f
-            color = SEVERITY_COLORS.get((sev or "").upper(), "#ffffff")
-            vals = [str(fid), str(tid), vuln or "", (sev or "").upper(), status or ""]
-            for col, val in enumerate(vals):
-                tc = color if col == 3 else "#c0c0d0"
-                lbl = ctk.CTkLabel(
-                    table_frame, text=val,
-                    font=ctk.CTkFont(size=12),
-                    text_color=tc,
-                )
-                lbl.grid(row=row_idx, column=col, padx=10, pady=2, sticky="w")
+            sev_upper = (sev or "").upper()
+            clr = SEVERITY_COLORS.get(sev_upper, TXT_SECONDARY)
+            row_bg = BG_CARD if r % 2 == 0 else "#0F1729"
 
-    # ── Audits View ─────────────────────────────────────────────────────
+            row_frame = ctk.CTkFrame(table_outer, fg_color=row_bg, corner_radius=0)
+            row_frame.grid(row=r, column=0, sticky="ew", padx=1)
+            for c, w in enumerate(col_weights):
+                row_frame.grid_columnconfigure(c, weight=w)
 
-    def show_audits(self):
+            vals = [str(fid), str(tid), vuln or "", sev_upper, status or "", ts or ""]
+            for c, v in enumerate(vals):
+                if c == 3:  # severity pill
+                    pill = SeverityPill(row_frame, text=v, color=clr)
+                    pill.grid(row=0, column=c, padx=14, pady=5, sticky="w")
+                else:
+                    tc = TXT_PRIMARY if c == 2 else TXT_SECONDARY
+                    ctk.CTkLabel(
+                        row_frame, text=v,
+                        font=ctk.CTkFont(*FONT_SMALL), text_color=tc, anchor="w",
+                    ).grid(row=0, column=c, padx=14, pady=6, sticky="w")
+
+        if not findings:
+            ctk.CTkLabel(
+                table_outer, text="No findings recorded yet. Run an audit to populate.",
+                font=ctk.CTkFont(*FONT_BODY), text_color=TXT_DIM,
+            ).grid(row=1, column=0, padx=20, pady=30)
+
+    # ╔══════════════════════════════════════════════════════════════════╗
+    # ║  SCANNER VIEW                                                   ║
+    # ╚══════════════════════════════════════════════════════════════════╝
+
+    def show_scanner(self):
         self._clear_content()
-        self._highlight_button(self.btn_audits)
+        self._activate_nav(self.btn_scan)
 
-        header = ctk.CTkLabel(
-            self.content, text="Run Security Audits",
-            font=ctk.CTkFont(size=24, weight="bold"),
+        wrapper = ctk.CTkFrame(self.content, fg_color=BG_ROOT, corner_radius=0)
+        wrapper.grid(row=0, column=0, sticky="nsew")
+        wrapper.grid_rowconfigure(4, weight=1)
+        wrapper.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            wrapper, text="Vulnerability Scanner",
+            font=ctk.CTkFont(*FONT_H1), text_color=TXT_PRIMARY, anchor="w",
+        ).grid(row=0, column=0, padx=30, pady=(28, 4), sticky="w")
+
+        ctk.CTkLabel(
+            wrapper, text="Select a scan type and configure target parameters",
+            font=ctk.CTkFont(*FONT_BODY), text_color=TXT_MUTED, anchor="w",
+        ).grid(row=0, column=0, padx=30, pady=(56, 0), sticky="w")
+
+        # ── Scan type segment ──────────────────────────────────────────
+        self._scan_mode = ctk.StringVar(value="ssrf")
+
+        seg_frame = ctk.CTkFrame(wrapper, fg_color="transparent")
+        seg_frame.grid(row=1, column=0, padx=25, pady=(18, 0), sticky="w")
+
+        modes = [
+            ("ssrf", "🌐  SSRF Web Audit"),
+            ("iac",  "🏗️  IaC Config Audit"),
+            ("net",  "🖥️  Network Audit"),
+        ]
+        for i, (val, label) in enumerate(modes):
+            ctk.CTkRadioButton(
+                seg_frame, text=label, variable=self._scan_mode, value=val,
+                font=ctk.CTkFont(*FONT_BODY), text_color=TXT_SECONDARY,
+                fg_color=ACCENT_INDIGO, hover_color=ACCENT_INDIGO,
+                border_color=BORDER_SUBTLE,
+            ).grid(row=0, column=i, padx=(0, 24), pady=8)
+
+        # ── Input area ─────────────────────────────────────────────────
+        input_card = ctk.CTkFrame(
+            wrapper, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
+            border_color=BORDER_SUBTLE, border_width=1,
         )
-        header.grid(row=0, column=0, columnspan=2, padx=30, pady=(25, 20), sticky="w")
+        input_card.grid(row=2, column=0, padx=25, pady=12, sticky="ew")
+        input_card.grid_columnconfigure(0, weight=1)
 
-        # Input field
-        input_label = ctk.CTkLabel(
-            self.content, text="Target URL / File Path:",
-            font=ctk.CTkFont(size=14),
+        ctk.CTkLabel(
+            input_card, text="Target",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
+            text_color=TXT_MUTED, anchor="w",
+        ).grid(row=0, column=0, padx=18, pady=(14, 2), sticky="w")
+
+        self.scan_entry = ctk.CTkEntry(
+            input_card, height=40,
+            placeholder_text="e.g.  http://host/api?url=test   or   ./infrastructure/",
+            fg_color=BG_INPUT, border_color=BORDER_SUBTLE, border_width=1,
+            corner_radius=BTN_RADIUS,
+            font=ctk.CTkFont(*FONT_BODY), text_color=TXT_PRIMARY,
         )
-        input_label.grid(row=1, column=0, padx=30, pady=(10, 0), sticky="w")
+        self.scan_entry.grid(row=1, column=0, padx=18, pady=(0, 4), sticky="ew")
 
-        self.target_entry = ctk.CTkEntry(
-            self.content, placeholder_text="e.g. http://host/api?url=test  or  ./infra/",
-            width=500, height=38,
+        self.start_btn = ctk.CTkButton(
+            input_card, text="▶  START SCAN", height=40, width=170,
+            corner_radius=BTN_RADIUS,
+            fg_color=ACCENT_INDIGO, hover_color="#4F46E5",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"),
+            command=self._dispatch_scan,
         )
-        self.target_entry.grid(row=2, column=0, columnspan=2, padx=30, pady=5, sticky="ew")
-        self.content.grid_columnconfigure(0, weight=1)
+        self.start_btn.grid(row=1, column=1, padx=(4, 18), pady=(0, 4))
 
-        # Buttons row
-        btn_frame = ctk.CTkFrame(self.content, fg_color="transparent")
-        btn_frame.grid(row=3, column=0, columnspan=2, padx=25, pady=10, sticky="w")
+        # ── Live console ───────────────────────────────────────────────
+        ctk.CTkLabel(
+            wrapper, text="Live Console",
+            font=ctk.CTkFont(*FONT_H3), text_color=TXT_MUTED, anchor="w",
+        ).grid(row=3, column=0, padx=30, pady=(8, 2), sticky="w")
 
-        ctk.CTkButton(
-            btn_frame, text="🔍  Run SSRF Audit",
-            command=self._run_ssrf, width=180,
-            fg_color="#e67e22", hover_color="#d35400",
-        ).grid(row=0, column=0, padx=5)
-
-        ctk.CTkButton(
-            btn_frame, text="🏗️  Run IaC Audit",
-            command=self._run_iac, width=180,
-            fg_color="#2ecc71", hover_color="#27ae60",
-        ).grid(row=0, column=1, padx=5)
-
-        ctk.CTkButton(
-            btn_frame, text="🖥️  Run Local Audit",
-            command=self._run_local, width=180,
-            fg_color="#3498db", hover_color="#2980b9",
-        ).grid(row=0, column=2, padx=5)
-
-        # Console log
-        log_label = ctk.CTkLabel(
-            self.content, text="Console Output:",
-            font=ctk.CTkFont(size=14),
+        console_card = ctk.CTkFrame(
+            wrapper, fg_color=BG_CONSOLE, corner_radius=CARD_RADIUS,
+            border_color=BORDER_SUBTLE, border_width=1,
         )
-        log_label.grid(row=4, column=0, padx=30, pady=(15, 0), sticky="w")
+        console_card.grid(row=4, column=0, padx=25, pady=(0, 20), sticky="nsew")
+        console_card.grid_rowconfigure(0, weight=1)
+        console_card.grid_columnconfigure(0, weight=1)
 
-        self.console_log = ctk.CTkTextbox(
-            self.content, height=250, fg_color="#0d0d14",
-            text_color="#00ff88", font=ctk.CTkFont(family="Consolas", size=12),
-            corner_radius=10,
+        self.console_box = ctk.CTkTextbox(
+            console_card, fg_color=BG_CONSOLE,
+            text_color=CLR_SAFE, corner_radius=0,
+            font=ctk.CTkFont(family="Consolas", size=12),
+            wrap="word",
         )
-        self.console_log.grid(row=5, column=0, columnspan=2, padx=25, pady=5, sticky="nsew")
-        self.content.grid_rowconfigure(5, weight=1)
-        self.console_log.insert("end", "Ready. Select an audit to begin.\n")
-        self.console_log.configure(state="disabled")
+        self.console_box.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
+        self._console_write("[INFO]  Scanner ready. Configure target and press START SCAN.\n")
+        self.console_box.configure(state="disabled")
 
-    def _log(self, text: str):
-        """Append text to the console log from any thread."""
+    def _console_write(self, text: str):
+        """Append styled text to the console box (thread-safe)."""
         def _do():
-            self.console_log.configure(state="normal")
-            self.console_log.insert("end", text + "\n")
-            self.console_log.see("end")
-            self.console_log.configure(state="disabled")
-        self.after(0, _do)
+            self.console_box.configure(state="normal")
+            self.console_box.insert("end", text)
+            self.console_box.see("end")
+            self.console_box.configure(state="disabled")
+        if threading.current_thread() is threading.main_thread():
+            _do()
+        else:
+            self.after(0, _do)
 
-    def _run_in_thread(self, func, *args):
-        """Run a function in a background thread, capturing stdout."""
+    def _dispatch_scan(self):
+        mode = self._scan_mode.get()
+        target = self.scan_entry.get().strip()
+
+        if mode in ("ssrf", "iac") and not target:
+            self._console_write("[WARN]  Please enter a target before starting.\n")
+            return
+
+        self.start_btn.configure(state="disabled", text="⏳  SCANNING…")
+
         def _worker():
-            self._log(f"▶ Starting scan...")
+            self._console_write(f"\n[INFO]  Starting {mode.upper()} scan…\n")
             buf = io.StringIO()
             try:
                 with redirect_stdout(buf), redirect_stderr(buf):
-                    func(*args)
+                    if mode == "ssrf":
+                        from src.main import run_audit_web
+                        run_audit_web(target)
+                    elif mode == "iac":
+                        from src.main import run_audit_iac
+                        run_audit_iac(target)
+                    elif mode == "net":
+                        from src.main import run_audit_local
+                        run_audit_local()
             except Exception as exc:
-                self._log(f"✘ Error: {exc}")
+                self._console_write(f"[VULN]  Error: {exc}\n")
+
             output = buf.getvalue()
             if output.strip():
-                self._log(output.strip())
-            self._log("✔ Scan complete.\n")
+                for line in output.strip().splitlines():
+                    tag = "[INFO]"
+                    if "error" in line.lower() or "insecure" in line.lower():
+                        tag = "[VULN]"
+                    elif "ok" in line.lower():
+                        tag = "[SUCCESS]"
+                    self._console_write(f"{tag}  {line}\n")
+
+            self._console_write("[SUCCESS]  Scan complete.\n")
+            self.after(0, lambda: self.start_btn.configure(state="normal", text="▶  START SCAN"))
+
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _run_ssrf(self):
-        target = self.target_entry.get().strip()
-        if not target:
-            self._log("⚠ Please enter a target URL first.")
-            return
-        from src.main import run_audit_web
-        self._run_in_thread(run_audit_web, target)
-
-    def _run_iac(self):
-        target = self.target_entry.get().strip()
-        if not target:
-            self._log("⚠ Please enter a file or directory path first.")
-            return
-        from src.main import run_audit_iac
-        self._run_in_thread(run_audit_iac, target)
-
-    def _run_local(self):
-        from src.main import run_audit_local
-        self._run_in_thread(run_audit_local)
-
-    # ── Reports View ────────────────────────────────────────────────────
+    # ╔══════════════════════════════════════════════════════════════════╗
+    # ║  REPORTS VIEW                                                   ║
+    # ╚══════════════════════════════════════════════════════════════════╝
 
     def show_reports(self):
         self._clear_content()
-        self._highlight_button(self.btn_reports)
+        self._activate_nav(self.btn_rpt)
 
-        header = ctk.CTkLabel(
-            self.content, text="Generate Reports",
-            font=ctk.CTkFont(size=24, weight="bold"),
+        wrapper = ctk.CTkFrame(self.content, fg_color=BG_ROOT, corner_radius=0)
+        wrapper.grid(row=0, column=0, sticky="nsew")
+        wrapper.grid_rowconfigure(3, weight=1)
+        wrapper.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            wrapper, text="Reports & SARIF Export",
+            font=ctk.CTkFont(*FONT_H1), text_color=TXT_PRIMARY, anchor="w",
+        ).grid(row=0, column=0, columnspan=2, padx=30, pady=(28, 4), sticky="w")
+
+        ctk.CTkLabel(
+            wrapper, text="Generate compliance reports and CI/CD-ready SARIF files",
+            font=ctk.CTkFont(*FONT_BODY), text_color=TXT_MUTED, anchor="w",
+        ).grid(row=0, column=0, padx=30, pady=(56, 0), sticky="w")
+
+        # Status indicator
+        self.rpt_status = ctk.CTkLabel(
+            wrapper, text="",
+            font=ctk.CTkFont(*FONT_BODY), text_color=CLR_SAFE,
         )
-        header.grid(row=0, column=0, columnspan=2, padx=30, pady=(25, 20), sticky="w")
+        self.rpt_status.grid(row=1, column=0, columnspan=2, padx=30, pady=(10, 0), sticky="w")
 
-        # Status label
-        self.report_status = ctk.CTkLabel(
-            self.content, text="", font=ctk.CTkFont(size=13),
-            text_color="#2ecc71",
+        # ── Report cards ───────────────────────────────────────────────
+        cards_row = ctk.CTkFrame(wrapper, fg_color="transparent")
+        cards_row.grid(row=2, column=0, columnspan=2, padx=25, pady=14, sticky="ew")
+        cards_row.grid_columnconfigure(0, weight=1)
+        cards_row.grid_columnconfigure(1, weight=1)
+
+        # Markdown card
+        md_card = ctk.CTkFrame(
+            cards_row, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
+            border_color=BORDER_SUBTLE, border_width=1,
         )
-        self.report_status.grid(row=1, column=0, columnspan=2, padx=30, pady=5, sticky="w")
+        md_card.grid(row=0, column=0, padx=6, pady=4, sticky="nsew")
+        md_card.grid_columnconfigure(0, weight=1)
 
-        btn_frame = ctk.CTkFrame(self.content, fg_color="transparent")
-        btn_frame.grid(row=2, column=0, padx=25, pady=20, sticky="w")
+        ctk.CTkLabel(
+            md_card, text="📝  Markdown Compliance Report",
+            font=ctk.CTkFont(*FONT_H3), text_color=TXT_PRIMARY, anchor="w",
+        ).grid(row=0, column=0, padx=20, pady=(20, 4), sticky="w")
+
+        ctk.CTkLabel(
+            md_card, text="Generates a structured compliance_report.md\nwith severity breakdown and remediation guidance.",
+            font=ctk.CTkFont(*FONT_SMALL), text_color=TXT_MUTED, anchor="w", justify="left",
+        ).grid(row=1, column=0, padx=20, pady=(0, 12), sticky="w")
 
         ctk.CTkButton(
-            btn_frame, text="📝  Generate Markdown Report",
-            command=self._gen_markdown, width=260, height=45,
-            font=ctk.CTkFont(size=14),
-        ).grid(row=0, column=0, padx=8, pady=8)
+            md_card, text="Generate Markdown", height=38,
+            corner_radius=BTN_RADIUS,
+            fg_color=ACCENT_INDIGO, hover_color="#4F46E5",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"),
+            command=self._gen_markdown,
+        ).grid(row=2, column=0, padx=20, pady=(0, 20), sticky="w")
+
+        # SARIF card
+        sarif_card = ctk.CTkFrame(
+            cards_row, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
+            border_color=BORDER_SUBTLE, border_width=1,
+        )
+        sarif_card.grid(row=0, column=1, padx=6, pady=4, sticky="nsew")
+        sarif_card.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            sarif_card, text="📦  SARIF 2.1.0 Export",
+            font=ctk.CTkFont(*FONT_H3), text_color=TXT_PRIMARY, anchor="w",
+        ).grid(row=0, column=0, padx=20, pady=(20, 4), sticky="w")
+
+        ctk.CTkLabel(
+            sarif_card, text="Exports findings to SARIF JSON for native\nintegration into GitHub Code Scanning & SOC tools.",
+            font=ctk.CTkFont(*FONT_SMALL), text_color=TXT_MUTED, anchor="w", justify="left",
+        ).grid(row=1, column=0, padx=20, pady=(0, 12), sticky="w")
 
         ctk.CTkButton(
-            btn_frame, text="📦  Export SARIF JSON",
-            command=self._gen_sarif, width=260, height=45,
-            font=ctk.CTkFont(size=14),
-            fg_color="#e67e22", hover_color="#d35400",
-        ).grid(row=0, column=1, padx=8, pady=8)
+            sarif_card, text="Export SARIF", height=38,
+            corner_radius=BTN_RADIUS,
+            fg_color=ACCENT_CYAN, hover_color="#0891B2",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"),
+            command=self._gen_sarif,
+        ).grid(row=2, column=0, padx=20, pady=(0, 20), sticky="w")
+
+        # ── Preview panel ──────────────────────────────────────────────
+        ctk.CTkLabel(
+            wrapper, text="Report Preview",
+            font=ctk.CTkFont(*FONT_H3), text_color=TXT_MUTED, anchor="w",
+        ).grid(row=3, column=0, padx=30, pady=(8, 2), sticky="nw")
+
+        self.preview_box = ctk.CTkTextbox(
+            wrapper, fg_color=BG_CONSOLE, corner_radius=CARD_RADIUS,
+            border_color=BORDER_SUBTLE, border_width=1,
+            font=ctk.CTkFont(family="Consolas", size=11),
+            text_color=TXT_SECONDARY, wrap="word",
+        )
+        self.preview_box.grid(row=4, column=0, columnspan=2, padx=25, pady=(0, 20), sticky="nsew")
+        wrapper.grid_rowconfigure(4, weight=1)
+
+        # Load existing report if available
+        report_path = PROJECT_ROOT / "compliance_report.md"
+        if report_path.is_file():
+            try:
+                text = report_path.read_text(encoding="utf-8")[:3000]
+                self.preview_box.insert("end", text)
+            except Exception:
+                pass
+        else:
+            self.preview_box.insert("end", "No report generated yet. Click 'Generate Markdown' above.")
+        self.preview_box.configure(state="disabled")
 
     def _gen_markdown(self):
         try:
             from src.reporting.generate import generate_report
             path, count = generate_report()
-            self.report_status.configure(
-                text=f"✔ Markdown report generated: {path.name} ({count} findings)",
-                text_color="#2ecc71",
+            self.rpt_status.configure(
+                text=f"✔  Markdown report generated: {path.name}  ({count} findings)",
+                text_color=CLR_SAFE,
             )
+            # Refresh preview
+            self.preview_box.configure(state="normal")
+            self.preview_box.delete("1.0", "end")
+            text = path.read_text(encoding="utf-8")[:3000]
+            self.preview_box.insert("end", text)
+            self.preview_box.configure(state="disabled")
         except Exception as exc:
-            self.report_status.configure(
-                text=f"✘ Error: {exc}", text_color="#e74c3c",
-            )
+            self.rpt_status.configure(text=f"✘  Error: {exc}", text_color=CLR_CRITICAL)
 
     def _gen_sarif(self):
         try:
             from src.reporting.sarif_exporter import export_to_sarif
             code = export_to_sarif("results.sarif")
             if code == 0:
-                self.report_status.configure(
-                    text="✔ SARIF report exported: results.sarif",
-                    text_color="#2ecc71",
+                self.rpt_status.configure(
+                    text="✔  SARIF report exported: results.sarif",
+                    text_color=CLR_SAFE,
                 )
             else:
-                self.report_status.configure(
-                    text="✘ SARIF export returned a non-zero exit code.",
-                    text_color="#e74c3c",
+                self.rpt_status.configure(
+                    text="✘  SARIF export returned a non-zero code.",
+                    text_color=CLR_CRITICAL,
                 )
         except Exception as exc:
-            self.report_status.configure(
-                text=f"✘ Error: {exc}", text_color="#e74c3c",
-            )
+            self.rpt_status.configure(text=f"✘  Error: {exc}", text_color=CLR_CRITICAL)
 
 
 def launch_gui():
