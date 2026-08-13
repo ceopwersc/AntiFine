@@ -1,8 +1,8 @@
 # AntiFine Compliance Report
 
-**Generated:** 2026-08-11 09:15:32 UTC  
+**Generated:** 2026-08-13 21:10:26 UTC  
 **Source database:** `antifine.db`  
-**Total findings:** 19  
+**Total findings:** 3  
 **Targets covered:** 1
 
 ---
@@ -11,42 +11,32 @@
 
 | Severity | Findings |
 | :--- | ---: |
-| 🟠 HIGH | 17 |
-| 🟡 MEDIUM | 2 |
-| **Total** | **19** |
+| 🟠 HIGH | 1 |
+| 🟡 MEDIUM | 1 |
+| 🔵 LOW | 1 |
+| **Total** | **3** |
 
 ---
 
 ## Findings by Severity
 
-### 🟠 HIGH (17)
+### 🟠 HIGH (1)
 
 | Target | Finding | Status | Detected | Recommended Remediation |
 | :--- | :--- | :--- | :--- | :--- |
-| 1 | Insecure Service: NetBIOS Name Service (137/udp) | OPEN | 2026-08-11 09:15:23 | Disable NetBIOS over TCP/IP on all external interfaces. |
-| 1 | Insecure Service: NetBIOS Name Service (137/udp) | OPEN | 2026-08-11 09:15:23 | Disable NetBIOS over TCP/IP on all external interfaces. |
-| 1 | Insecure Service: NetBIOS Name Service (137/udp) | OPEN | 2026-08-11 09:15:23 | Disable NetBIOS over TCP/IP on all external interfaces. |
-| 1 | Insecure Service: NetBIOS Name Service (137/udp) | OPEN | 2026-08-11 09:15:23 | Disable NetBIOS over TCP/IP on all external interfaces. |
-| 1 | Insecure Service: NetBIOS Name Service (137/udp) | OPEN | 2026-08-11 09:15:23 | Disable NetBIOS over TCP/IP on all external interfaces. |
-| 1 | Insecure Service: NetBIOS Datagram (138/udp) | OPEN | 2026-08-11 09:15:23 | Disable NetBIOS over TCP/IP on all external interfaces. |
-| 1 | Insecure Service: NetBIOS Datagram (138/udp) | OPEN | 2026-08-11 09:15:23 | Disable NetBIOS over TCP/IP on all external interfaces. |
-| 1 | Insecure Service: NetBIOS Datagram (138/udp) | OPEN | 2026-08-11 09:15:23 | Disable NetBIOS over TCP/IP on all external interfaces. |
-| 1 | Insecure Service: NetBIOS Datagram (138/udp) | OPEN | 2026-08-11 09:15:23 | Disable NetBIOS over TCP/IP on all external interfaces. |
-| 1 | Insecure Service: NetBIOS Datagram (138/udp) | OPEN | 2026-08-11 09:15:23 | Disable NetBIOS over TCP/IP on all external interfaces. |
-| 1 | Insecure Service: NetBIOS Session (139/tcp) | OPEN | 2026-08-11 09:15:23 | Disable NetBIOS session service; use SMB over 445 with signing, or restrict it to trusted networks. |
-| 1 | Insecure Service: NetBIOS Session (139/tcp) | OPEN | 2026-08-11 09:15:23 | Disable NetBIOS session service; use SMB over 445 with signing, or restrict it to trusted networks. |
-| 1 | Insecure Service: NetBIOS Session (139/tcp) | OPEN | 2026-08-11 09:15:23 | Disable NetBIOS session service; use SMB over 445 with signing, or restrict it to trusted networks. |
-| 1 | Insecure Service: NetBIOS Session (139/tcp) | OPEN | 2026-08-11 09:15:23 | Disable NetBIOS session service; use SMB over 445 with signing, or restrict it to trusted networks. |
-| 1 | Insecure Service: NetBIOS Session (139/tcp) | OPEN | 2026-08-11 09:15:23 | Disable NetBIOS session service; use SMB over 445 with signing, or restrict it to trusted networks. |
-| 1 | Insecure Service: SMB (445/tcp) | OPEN | 2026-08-11 09:15:23 | Restrict SMB to trusted networks, enforce signing, and disable SMBv1 if still enabled. |
-| 1 | Insecure Service: SMB (445/tcp) | OPEN | 2026-08-11 09:15:23 | Restrict SMB to trusted networks, enforce signing, and disable SMBv1 if still enabled. |
+| 1 | SSRF | OPEN | 2026-08-13 21:10:20 | Review whether this service must listen on an external interface. Bind it to localhost, restrict it at the firewall, or migrate to an encrypted equivalent. |
 
-### 🟡 MEDIUM (2)
+### 🟡 MEDIUM (1)
 
 | Target | Finding | Status | Detected | Recommended Remediation |
 | :--- | :--- | :--- | :--- | :--- |
-| 1 | Insecure Service: MSRPC (135/tcp) | OPEN | 2026-08-11 09:15:23 | Block the RPC endpoint mapper at the host firewall; expose it only to trusted management networks. |
-| 1 | Insecure Service: MSRPC (135/tcp) | OPEN | 2026-08-11 09:15:23 | Block the RPC endpoint mapper at the host firewall; expose it only to trusted management networks. |
+| 1 | Misconfiguration | OPEN | 2026-08-13 21:10:20 | Review whether this service must listen on an external interface. Bind it to localhost, restrict it at the firewall, or migrate to an encrypted equivalent. |
+
+### 🔵 LOW (1)
+
+| Target | Finding | Status | Detected | Recommended Remediation |
+| :--- | :--- | :--- | :--- | :--- |
+| 1 | Info Disclosure | OPEN | 2026-08-13 21:10:20 | Review whether this service must listen on an external interface. Bind it to localhost, restrict it at the firewall, or migrate to an encrypted equivalent. |
 
 ---
 
