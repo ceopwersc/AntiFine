@@ -1,0 +1,11 @@
+@import "tailwindcss";
+@theme {
+  --color-oled: #050505;
+  --color-surface: #121212;
+  --color-surface-hover: #1E1E1E;
+  --color-neon: #00E5FF;
+  --color-danger: #FF003C;
+  --color-warning: #FFB800;
+  --color-success: #00FF66;
+}
+body { background-color: var(--color-oled); color: white; font-family: 'Inter', system-ui, sans-serif; }
