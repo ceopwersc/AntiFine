@@ -20,6 +20,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from database.setup import initialize_database  # noqa: E402  (needs sys.path above)
 from src.reporting.generate import ReportError, generate_report  # noqa: E402
 from src.reporting.sarif_exporter import export_to_sarif  # noqa: E402
+from src.scanners.iac_audit import IaCScannerError, run_iac_audit  # noqa: E402
 from src.scanners.baseline_audit import (  # noqa: E402
     ScannerError,
     format_summary,
@@ -63,6 +64,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the SSRF/web scanner against the given target URL. The URL "
              "should include query parameters to fuzz, e.g. "
              "'http://host/api?url=test'.",
+    )
+    parser.add_argument(
+        "--audit-iac",
+        metavar="FILE_OR_DIR",
+        help="Run the IaC scanner against a specific Dockerfile or Kubernetes YAML file/directory.",
     )
     parser.add_argument(
         "--target-id",
@@ -149,6 +155,25 @@ def run_audit_web(target_url: str, target_id: int = 1, dry_run: bool = False) ->
         )
     return 0
 
+def run_audit_iac(target_path: str, target_id: int = 1, dry_run: bool = False) -> int:
+    """Run the IaC scanner against a target and report findings."""
+    try:
+        findings = run_iac_audit(target_path, target_id=target_id, persist=not dry_run)
+    except IaCScannerError as exc:
+        print(f"[error] IaC audit failed: {exc}", file=sys.stderr)
+        return 1
+        
+    print(f"IaC audit: {len(findings)} insecure configuration(s) flagged.")
+    for finding in findings:
+        print(f"  [{finding[1]:<8}] {finding[0]}")
+        
+    if dry_run:
+        print("[info] Dry run: no rows written to the database.")
+    else:
+        print(f"[ok] Recorded {len(findings)} finding(s) against target_id={target_id}.")
+        
+    return 0
+
 
 def run_report() -> int:
     """Generate the Markdown compliance report."""
@@ -168,7 +193,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if not (
-        args.init or args.audit or args.audit_local or args.audit_web or args.report or args.export_sarif
+        args.init or args.audit or args.audit_local or args.audit_web or args.audit_iac or args.report or args.export_sarif
     ):
         parser.print_help()
         return 0
@@ -185,6 +210,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.audit_web:
         exit_code = run_audit_web(
             args.audit_web, target_id=args.target_id, dry_run=args.dry_run
+        )
+        if exit_code != 0:
+            return exit_code
+    if args.audit_iac:
+        exit_code = run_audit_iac(
+            args.audit_iac, target_id=args.target_id, dry_run=args.dry_run
         )
         if exit_code != 0:
             return exit_code

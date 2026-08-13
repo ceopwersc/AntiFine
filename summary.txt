@@ -24,6 +24,11 @@ An automated report generator that queries the local database and compiles a str
 * Provides static, port-specific fallback remediation advice for common misconfigurations.
 
 
+4. Infrastructure-as-Code (IaC) Auditor (src/scanners/iac_audit.py)
+* Added via the --audit-iac flag.
+* Performs static analysis on local configuration files (like Dockerfiles and Kubernetes YAML).
+* Identifies missing USER directives, missing HEALTHCHECK instructions, privileged containers, and missing resource limits.
+
 5. Offline Knowledge Base (src/reporting/knowledge_base.py)
 A local, offline dictionary mapping vulnerability types to structured technical remediation guidance. It provides a technical summary, step-by-step mitigation guidance, and secure code/configuration examples, injected directly into compliance reports.
 
