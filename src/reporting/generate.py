@@ -24,6 +24,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from database.setup import DB_PATH  # noqa: E402
+from src.reporting.knowledge_base import get_remediation  # noqa: E402
 
 REPORT_PATH: Path = PROJECT_ROOT / "compliance_report.md"
 
@@ -244,18 +245,39 @@ def render_report(
         lines += [
             f"### {badge} {severity} ({len(bucket)})",
             "",
-            "| Target | Finding | Status | Detected | Recommended Remediation |",
-            "| :--- | :--- | :--- | :--- | :--- |",
+            "| Target | Finding | Status | Detected |",
+            "| :--- | :--- | :--- | :--- |",
         ]
         for record in bucket:
             lines.append(
                 f"| {record.target_id} "
                 f"| {_escape_cell(record.vulnerability_type)} "
                 f"| {_escape_cell(record.status)} "
-                f"| {_escape_cell(record.timestamp)} "
-                f"| {_escape_cell(record.remediation)} |"
+                f"| {_escape_cell(record.timestamp)} |"
             )
         lines.append("")
+
+        for record in bucket:
+            lines += [
+                f"#### Target {record.target_id}: {record.vulnerability_type}",
+                "",
+                "**Remediation & Hardening**",
+                ""
+            ]
+            
+            kb = get_remediation(record.vulnerability_type)
+            lines += [
+                f"**Summary:** {kb['summary']}",
+                "",
+                "**Mitigation:**",
+                kb['mitigation'],
+                "",
+                "**Example:**",
+                kb['example'],
+                "",
+                "---",
+                ""
+            ]
 
     lines += [
         "---",
