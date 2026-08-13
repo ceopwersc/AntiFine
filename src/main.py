@@ -21,6 +21,7 @@ from database.setup import initialize_database  # noqa: E402  (needs sys.path ab
 from src.reporting.generate import ReportError, generate_report  # noqa: E402
 from src.reporting.sarif_exporter import export_to_sarif  # noqa: E402
 from src.scanners.iac_audit import IaCScannerError, run_iac_audit  # noqa: E402
+from src.ui.dashboard import interactive_loop  # noqa: E402
 from src.scanners.baseline_audit import (  # noqa: E402
     ScannerError,
     format_summary,
@@ -90,6 +91,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--export-sarif",
         metavar="FILE",
         help="Export the compliance findings into SARIF 2.1.0 JSON format.",
+    )
+    parser.add_argument(
+        "--ui",
+        action="store_true",
+        help="Launch the interactive Rich TUI dashboard.",
     )
     return parser
 
@@ -192,11 +198,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    if args.ui:
+        return interactive_loop()
+
     if not (
         args.init or args.audit or args.audit_local or args.audit_web or args.audit_iac or args.report or args.export_sarif
     ):
-        parser.print_help()
-        return 0
+        return interactive_loop()
 
     exit_code = 0
     if args.init:
