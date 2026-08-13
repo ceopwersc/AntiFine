@@ -1,0 +1,45 @@
+name: AntiFine Security Scan
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  antifine-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write # Required for SARIF upload
+      actions: read
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run AntiFine Pipeline
+        run: |
+          # 1. Initialize database
+          python src/main.py --init
+          
+          # 2. Run target scans (Add your specific audit commands here later)
+          # python src/main.py --audit-local
+          
+          # 3. Export to SARIF
+          python src/main.py --export-sarif results.sarif
+
+      - name: Upload SARIF file
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+          category: antifine
