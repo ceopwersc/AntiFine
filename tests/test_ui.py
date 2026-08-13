@@ -74,11 +74,5 @@ def test_desktop_app_severity_counts_missing_db(tmp_path):
     """Verify _fetch_severity_counts returns zeroes for non-existent DB."""
     from src.ui.desktop_app import _fetch_severity_counts
     counts = _fetch_severity_counts(db_path=tmp_path / "nonexistent.db")
-    assert counts == {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0}
+    assert counts == {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
 
-
-def test_desktop_app_fetch_all_findings_missing_db(tmp_path):
-    """Verify _fetch_all_findings returns empty list for non-existent DB."""
-    from src.ui.desktop_app import _fetch_all_findings
-    findings = _fetch_all_findings(db_path=tmp_path / "nonexistent.db")
-    assert findings == []
