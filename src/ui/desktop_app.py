@@ -1,17 +1,17 @@
-"""AntiFine Native Desktop Application — Premium UI.
+"""AntiFine Native Desktop Application — Ultimate Cyber-Sec OLED UI.
 
 A high-end, commercial-grade cybersecurity dashboard built with CustomTkinter.
-Dark-themed with precise color tokens, typography hierarchy, and polished layout.
+Features custom frame-based animations, OLED black themes, and premium spacing.
 """
 
 from __future__ import annotations
 
 import io
+import math
 import sqlite3
 import sys
 import threading
 from contextlib import redirect_stdout, redirect_stderr
-from datetime import datetime, timezone
 from pathlib import Path
 
 import customtkinter as ctk
@@ -23,63 +23,60 @@ if str(PROJECT_ROOT) not in sys.path:
 from database.setup import DB_PATH, initialize_database  # noqa: E402
 
 # ╔══════════════════════════════════════════════════════════════════════════╗
-# ║  DESIGN TOKENS                                                         ║
+# ║  DESIGN TOKENS (Cyber-Sec OLED)                                          ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
-# Backgrounds
-BG_ROOT       = "#090D16"
-BG_SIDEBAR    = "#0B1120"
-BG_CARD       = "#111827"
-BG_INPUT      = "#030712"
-BG_HOVER      = "#1E293B"
-BG_ACTIVE     = "#1E293B"
-BG_CONSOLE    = "#030712"
+BG_ROOT       = "#050505"
+BG_SIDEBAR    = "#0A0A0A"
+BG_CARD       = "#121212"
+BG_INPUT      = "#0A0A0A"
+BORDER_SUBTLE = "#1E1E1E"
+BG_HOVER      = "#181818"
 
-# Borders
-BORDER_SUBTLE = "#1F2937"
-BORDER_ACCENT = "#6366F1"
+# CTAs
+CTA_PRIMARY_BG       = "#003344"
+CTA_PRIMARY_TXT      = "#00E5FF"
+CTA_PRIMARY_BG_HOV   = "#004C66"
+CTA_PRIMARY_TXT_HOV  = "#00FFD1"
 
-# Accents
-ACCENT_INDIGO = "#6366F1"
-ACCENT_CYAN   = "#06B6D4"
+CTA_SECONDARY_BG     = "#121212"
+CTA_SECONDARY_TXT    = "#A3A3A3"
+CTA_SECONDARY_BG_HOV = "#1E1E1E"
+CTA_SECONDARY_TXT_HOV= "#FFFFFF"
 
 # Severity palette
-CLR_CRITICAL  = "#F43F5E"
-CLR_HIGH      = "#F43F5E"
-CLR_MEDIUM    = "#FBBF24"
-CLR_LOW       = "#38BDF8"
-CLR_SAFE      = "#34D399"
+CLR_CRITICAL  = "#FF003C"
+CLR_HIGH      = "#FF003C"
+CLR_MEDIUM    = "#FFB800"
+CLR_LOW       = "#0088FF"
+CLR_SAFE      = "#00FF66"
 
 SEVERITY_COLORS = {
     "CRITICAL": CLR_CRITICAL,
     "HIGH":     CLR_HIGH,
     "MEDIUM":   CLR_MEDIUM,
     "LOW":      CLR_LOW,
-    "INFO":     "#94A3B8",
+    "INFO":     "#888888",
 }
 
 # Text colors
-TXT_PRIMARY   = "#F1F5F9"
-TXT_SECONDARY = "#94A3B8"
-TXT_MUTED     = "#9CA3AF"
-TXT_DIM       = "#64748B"
+TXT_PRIMARY   = "#FFFFFF"
+TXT_SECONDARY = "#888888"
+TXT_TERM      = "#A3A3A3"
 
 # Typography
 FONT_FAMILY   = "Segoe UI"
-FONT_H1       = (FONT_FAMILY, 22, "bold")
+FONT_H1       = (FONT_FAMILY, 28, "bold")
 FONT_H2       = (FONT_FAMILY, 16, "bold")
-FONT_H3       = (FONT_FAMILY, 14, "bold")
-FONT_BODY     = (FONT_FAMILY, 12)
-FONT_SMALL    = (FONT_FAMILY, 11)
-FONT_MONO     = ("Consolas", 12)
-FONT_MONO_SM  = ("Consolas", 11)
+FONT_SUB      = (FONT_FAMILY, 14, "normal")
+FONT_BODY     = (FONT_FAMILY, 12, "normal")
+FONT_TERM     = ("Consolas", 11, "normal")
+FONT_BTN      = (FONT_FAMILY, 16, "bold")
 
 # Dimensions
-SIDEBAR_W     = 200
-CARD_RADIUS   = 12
-BTN_RADIUS    = 8
+SIDEBAR_W_EXP = 220
+SIDEBAR_W_COL = 60
 
-# CTk global
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
@@ -104,7 +101,6 @@ def _fetch_severity_counts(db_path: Path = DB_PATH) -> dict[str, int]:
         pass
     return counts
 
-
 def _fetch_all_findings(db_path: Path = DB_PATH) -> list[tuple]:
     if not db_path.is_file():
         return []
@@ -112,10 +108,75 @@ def _fetch_all_findings(db_path: Path = DB_PATH) -> list[tuple]:
         with sqlite3.connect(db_path) as conn:
             return conn.execute(
                 "SELECT id, target_id, vulnerability_type, severity, status, "
-                "timestamp FROM scan_results ORDER BY id DESC"
+                "timestamp FROM scan_results ORDER BY id DESC LIMIT 50"
             ).fetchall()
     except sqlite3.Error:
         return []
+
+
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  ANIMATION ENGINE                                                      ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+
+def interpolate_hex(c1: str, c2: str, factor: float) -> str:
+    """Interpolate between two 6-digit hex colors."""
+    try:
+        r1, g1, b1 = int(c1[1:3], 16), int(c1[3:5], 16), int(c1[5:7], 16)
+        r2, g2, b2 = int(c2[1:3], 16), int(c2[3:5], 16), int(c2[5:7], 16)
+    except ValueError:
+        return c2
+
+    r = int(r1 + (r2 - r1) * factor)
+    g = int(g1 + (g2 - g1) * factor)
+    b = int(b1 + (b2 - b1) * factor)
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+class AnimatedButton(ctk.CTkButton):
+    """Button with smooth color fading on hover."""
+
+    def __init__(self, master, base_bg, hover_bg, base_txt, hover_txt, duration_ms=150, step_ms=15, **kwargs):
+        super().__init__(master, fg_color=base_bg, hover_color=hover_bg, text_color=base_txt, **kwargs)
+        self.base_bg = base_bg
+        self.hover_bg = hover_bg
+        self.base_txt = base_txt
+        self.hover_txt = hover_txt
+        self.duration_ms = duration_ms
+        self.step_ms = step_ms
+        self._anim_id = None
+        self._current_factor = 0.0
+        self._target_factor = 0.0
+
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
+
+    def _on_enter(self, event):
+        self._target_factor = 1.0
+        self._animate()
+
+    def _on_leave(self, event):
+        self._target_factor = 0.0
+        self._animate()
+
+    def _animate(self):
+        if self._anim_id:
+            self.after_cancel(self._anim_id)
+        
+        diff = self._target_factor - self._current_factor
+        steps = self.duration_ms / self.step_ms
+        if abs(diff) < 0.01:
+            self._current_factor = self._target_factor
+            self._apply_colors()
+            return
+
+        self._current_factor += diff / steps
+        self._apply_colors()
+        self._anim_id = self.after(self.step_ms, self._animate)
+
+    def _apply_colors(self):
+        new_bg = interpolate_hex(self.base_bg, self.hover_bg, self._current_factor)
+        new_txt = interpolate_hex(self.base_txt, self.hover_txt, self._current_factor)
+        # CustomTkinter hack to override standard hover behavior
+        self.configure(fg_color=new_bg, hover_color=new_bg, text_color=new_txt)
 
 
 # ╔══════════════════════════════════════════════════════════════════════════╗
@@ -123,41 +184,37 @@ def _fetch_all_findings(db_path: Path = DB_PATH) -> list[tuple]:
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
 class MetricCard(ctk.CTkFrame):
-    """Hero metric card with a colored top indicator line."""
-
+    """Glass-like metric card (2x2 grid target)."""
     def __init__(self, master, label: str, value: int, accent: str, **kw):
         super().__init__(
-            master, corner_radius=CARD_RADIUS,
-            fg_color=BG_CARD, border_color=BORDER_SUBTLE, border_width=1,
-            **kw,
+            master, corner_radius=15,
+            fg_color=BG_CARD, border_color=BORDER_SUBTLE, border_width=1, **kw
         )
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_rowconfigure(3, weight=1)
         self.grid_columnconfigure(0, weight=1)
-
-        # Top accent line
-        bar = ctk.CTkFrame(self, height=3, corner_radius=0, fg_color=accent)
-        bar.grid(row=0, column=0, sticky="new", padx=1, pady=(1, 0))
 
         val_lbl = ctk.CTkLabel(
             self, text=str(value),
             font=ctk.CTkFont(family=FONT_FAMILY, size=36, weight="bold"),
             text_color=accent,
         )
-        val_lbl.grid(row=1, column=0, padx=20, pady=(18, 0))
+        val_lbl.grid(row=1, column=0, pady=(15, 0))
 
         name_lbl = ctk.CTkLabel(
-            self, text=label,
+            self, text=label.upper(),
             font=ctk.CTkFont(family=FONT_FAMILY, size=12),
-            text_color=TXT_MUTED,
+            text_color=TXT_SECONDARY,
         )
-        name_lbl.grid(row=2, column=0, padx=20, pady=(2, 18))
-
+        name_lbl.grid(row=2, column=0, pady=(0, 15))
 
 class SeverityPill(ctk.CTkFrame):
-    """A small rounded pill badge with severity color."""
-
+    """Pill badge for findings."""
     def __init__(self, master, text: str, color: str, **kw):
+        # We simulate the translucent background with a pre-mixed dark color (approximate 15% opacity on BG_CARD)
+        mixed_bg = interpolate_hex(BG_CARD, color, 0.15)
         super().__init__(
-            master, corner_radius=6, fg_color="#1A1A2E",
+            master, corner_radius=10, fg_color=mixed_bg,
             border_color=color, border_width=1, **kw,
         )
         lbl = ctk.CTkLabel(
@@ -165,27 +222,7 @@ class SeverityPill(ctk.CTkFrame):
             font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
             text_color=color,
         )
-        lbl.grid(padx=10, pady=2)
-
-
-class NavButton(ctk.CTkButton):
-    """Sidebar navigation button with accent-left-pill highlight."""
-
-    def __init__(self, master, text: str, command=None, **kw):
-        super().__init__(
-            master, text=text, command=command,
-            fg_color="transparent", hover_color=BG_HOVER,
-            anchor="w", corner_radius=BTN_RADIUS,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=14),
-            text_color=TXT_SECONDARY, height=42,
-            **kw,
-        )
-
-    def set_active(self, active: bool):
-        if active:
-            self.configure(fg_color=BG_ACTIVE, text_color=TXT_PRIMARY)
-        else:
-            self.configure(fg_color="transparent", text_color=TXT_SECONDARY)
+        lbl.grid(padx=12, pady=2)
 
 
 # ╔══════════════════════════════════════════════════════════════════════════╗
@@ -198,12 +235,18 @@ class AntiFineApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("AntiFine — Security Auditor")
-        self.geometry("950x650")
-        self.minsize(850, 550)
+        self.title("AntiFine — Cyber-Sec Auditor")
+        self.geometry("1100x750")
+        self.minsize(900, 600)
         self.configure(fg_color=BG_ROOT)
 
-        self.grid_rowconfigure(1, weight=1)
+        # Borderless look hack for CustomTkinter main window (some platforms)
+        try:
+            self.wm_attributes("-fullscreen", False)
+        except Exception:
+            pass
+
+        self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=1)
 
         try:
@@ -211,91 +254,99 @@ class AntiFineApp(ctk.CTk):
         except Exception:
             pass
 
-        self._build_header()
         self._build_sidebar()
-
-        # Content container
+        
         self.content = ctk.CTkFrame(self, corner_radius=0, fg_color=BG_ROOT)
-        self.content.grid(row=1, column=1, sticky="nsew")
+        self.content.grid(row=0, column=1, sticky="nsew")
         self.content.grid_rowconfigure(0, weight=1)
         self.content.grid_columnconfigure(0, weight=1)
 
+        self._pulse_id = None
+        self._sidebar_anim_id = None
+        self._is_sidebar_open = True
+        self._sidebar_w = SIDEBAR_W_EXP
+
         self.show_dashboard()
-
-    # ── Header ──────────────────────────────────────────────────────────
-
-    def _build_header(self):
-        hdr = ctk.CTkFrame(
-            self, height=50, corner_radius=0,
-            fg_color=BG_SIDEBAR, border_color=BORDER_SUBTLE, border_width=1,
-        )
-        hdr.grid(row=0, column=0, columnspan=2, sticky="new")
-        hdr.grid_columnconfigure(1, weight=1)
-
-        logo = ctk.CTkLabel(
-            hdr, text="🛡️  ANTIFINE",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=18, weight="bold"),
-            text_color=ACCENT_INDIGO,
-        )
-        logo.grid(row=0, column=0, padx=20, pady=12, sticky="w")
-
-        # Status pill
-        status_frame = ctk.CTkFrame(
-            hdr, corner_radius=10,
-            fg_color="#0D2818", border_color=CLR_SAFE, border_width=1,
-        )
-        status_frame.grid(row=0, column=1, padx=0, pady=12, sticky="e")
-
-        status_lbl = ctk.CTkLabel(
-            status_frame, text="●  ENGINE ONLINE",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
-            text_color=CLR_SAFE,
-        )
-        status_lbl.grid(padx=14, pady=4)
-
-        # Refresh button
-        self.refresh_btn = ctk.CTkButton(
-            hdr, text="⟳  Refresh", width=90, height=30,
-            corner_radius=BTN_RADIUS,
-            fg_color=ACCENT_INDIGO, hover_color="#4F46E5",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
-            command=self._refresh_current_view,
-        )
-        self.refresh_btn.grid(row=0, column=2, padx=(10, 20), pady=12, sticky="e")
 
     # ── Sidebar ─────────────────────────────────────────────────────────
 
     def _build_sidebar(self):
-        sb = ctk.CTkFrame(
-            self, width=SIDEBAR_W, corner_radius=0,
+        self.sidebar = ctk.CTkFrame(
+            self, width=SIDEBAR_W_EXP, corner_radius=0,
             fg_color=BG_SIDEBAR, border_color=BORDER_SUBTLE, border_width=1,
         )
-        sb.grid(row=1, column=0, sticky="nsew")
-        sb.grid_rowconfigure(5, weight=1)
-        sb.grid_propagate(False)
+        self.sidebar.grid(row=0, column=0, sticky="nsew")
+        self.sidebar.grid_rowconfigure(5, weight=1)
+        self.sidebar.grid_propagate(False)
 
-        pad_y = 4
-        self.nav_btns: list[NavButton] = []
+        # Header area
+        hdr_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        hdr_frame.grid(row=0, column=0, sticky="ew", pady=(20, 30))
+        hdr_frame.grid_columnconfigure(1, weight=1)
 
-        self.btn_dash = NavButton(sb, text="📊  Overview Dashboard", command=self.show_dashboard)
-        self.btn_dash.grid(row=0, column=0, padx=10, pady=(20, pad_y), sticky="ew")
-        self.nav_btns.append(self.btn_dash)
-
-        self.btn_scan = NavButton(sb, text="🛡️  Vulnerability Scanner", command=self.show_scanner)
-        self.btn_scan.grid(row=1, column=0, padx=10, pady=pad_y, sticky="ew")
-        self.nav_btns.append(self.btn_scan)
-
-        self.btn_rpt = NavButton(sb, text="📄  Reports & SARIF", command=self.show_reports)
-        self.btn_rpt.grid(row=2, column=0, padx=10, pady=pad_y, sticky="ew")
-        self.nav_btns.append(self.btn_rpt)
-
-        # Bottom branding
-        ver = ctk.CTkLabel(
-            sb, text="v1.0.0  ·  AntiFine Engine",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=10),
-            text_color=TXT_DIM,
+        self.toggle_btn = ctk.CTkButton(
+            hdr_frame, text="☰", width=40, height=40,
+            fg_color="transparent", hover_color=BG_HOVER,
+            text_color=TXT_PRIMARY, font=ctk.CTkFont(size=20),
+            command=self._toggle_sidebar
         )
-        ver.grid(row=6, column=0, padx=10, pady=(0, 14))
+        self.toggle_btn.grid(row=0, column=0, padx=(10, 5))
+
+        self.logo_lbl = ctk.CTkLabel(
+            hdr_frame, text="ANTIFINE",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=18, weight="bold"),
+            text_color=TXT_PRIMARY,
+        )
+        self.logo_lbl.grid(row=0, column=1, sticky="w")
+
+        # Nav Buttons
+        self.nav_btns = []
+        self._add_nav_btn(1, "📊", " Dashboard", self.show_dashboard)
+        self._add_nav_btn(2, "🛡️", " Scanner", self.show_scanner)
+        self._add_nav_btn(3, "📄", " Reports", self.show_reports)
+
+    def _add_nav_btn(self, row, icon, text, command):
+        btn = AnimatedButton(
+            self.sidebar, base_bg="transparent", hover_bg=BG_HOVER,
+            base_txt=TXT_SECONDARY, hover_txt=TXT_PRIMARY,
+            text=f"{icon} {text}", command=command,
+            anchor="w", corner_radius=8, height=45,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=14)
+        )
+        btn.grid(row=row, column=0, padx=10, pady=5, sticky="ew")
+        btn._text_raw = text
+        btn._icon_raw = icon
+        self.nav_btns.append(btn)
+
+    def _toggle_sidebar(self):
+        if self._sidebar_anim_id:
+            self.after_cancel(self._sidebar_anim_id)
+        self._is_sidebar_open = not self._is_sidebar_open
+        self._animate_sidebar()
+
+    def _animate_sidebar(self):
+        target_w = SIDEBAR_W_EXP if self._is_sidebar_open else SIDEBAR_W_COL
+        diff = target_w - self._sidebar_w
+        if abs(diff) < 2:
+            self._sidebar_w = target_w
+            self.sidebar.configure(width=int(self._sidebar_w))
+            self._update_sidebar_content()
+            return
+
+        self._sidebar_w += diff * 0.3
+        self.sidebar.configure(width=int(self._sidebar_w))
+        self._update_sidebar_content()
+        self._sidebar_anim_id = self.after(15, self._animate_sidebar)
+
+    def _update_sidebar_content(self):
+        if self._sidebar_w < 120:
+            self.logo_lbl.grid_remove()
+            for btn in self.nav_btns:
+                btn.configure(text=btn._icon_raw)
+        else:
+            self.logo_lbl.grid()
+            for btn in self.nav_btns:
+                btn.configure(text=f"{btn._icon_raw} {btn._text_raw}")
 
     # ── Helpers ─────────────────────────────────────────────────────────
 
@@ -303,17 +354,19 @@ class AntiFineApp(ctk.CTk):
         for w in self.content.winfo_children():
             w.destroy()
 
-    def _activate_nav(self, active: NavButton):
-        for btn in self.nav_btns:
-            btn.set_active(btn is active)
+    def _pulse_indicator(self, widget, active=True, step=0):
+        if not active:
+            if self._pulse_id:
+                self.after_cancel(self._pulse_id)
+                self._pulse_id = None
+            widget.configure(text_color=TXT_SECONDARY)
+            return
 
-    def _refresh_current_view(self):
-        # Re-render whichever view is active
-        for btn in self.nav_btns:
-            if btn.cget("fg_color") == BG_ACTIVE:
-                btn.invoke()
-                return
-        self.show_dashboard()
+        # Sine wave interpolation for pulsing effect
+        factor = (math.sin(step) + 1) / 2
+        new_color = interpolate_hex(BG_ROOT, CTA_PRIMARY_TXT, factor)
+        widget.configure(text_color=new_color)
+        self._pulse_id = self.after(30, lambda: self._pulse_indicator(widget, True, step + 0.15))
 
     # ╔══════════════════════════════════════════════════════════════════╗
     # ║  DASHBOARD VIEW                                                 ║
@@ -321,202 +374,138 @@ class AntiFineApp(ctk.CTk):
 
     def show_dashboard(self):
         self._clear_content()
-        self._activate_nav(self.btn_dash)
 
         wrapper = ctk.CTkScrollableFrame(self.content, fg_color=BG_ROOT, corner_radius=0)
         wrapper.grid(row=0, column=0, sticky="nsew")
         wrapper.grid_columnconfigure(0, weight=1)
 
-        # Section title
         ctk.CTkLabel(
             wrapper, text="Overview Dashboard",
             font=ctk.CTkFont(*FONT_H1), text_color=TXT_PRIMARY, anchor="w",
-        ).grid(row=0, column=0, columnspan=4, padx=30, pady=(28, 4), sticky="w")
-
+        ).grid(row=0, column=0, padx=40, pady=(40, 5), sticky="w")
         ctk.CTkLabel(
-            wrapper, text="Real-time visibility into your security posture",
-            font=ctk.CTkFont(*FONT_BODY), text_color=TXT_MUTED, anchor="w",
-        ).grid(row=1, column=0, columnspan=4, padx=30, pady=(0, 18), sticky="w")
+            wrapper, text="Real-time security posture and threat metrics.",
+            font=ctk.CTkFont(*FONT_SUB), text_color=TXT_SECONDARY, anchor="w",
+        ).grid(row=1, column=0, padx=40, pady=(0, 30), sticky="w")
 
-        # ── Metric cards ────────────────────────────────────────────────
-        cards_row = ctk.CTkFrame(wrapper, fg_color="transparent")
-        cards_row.grid(row=2, column=0, columnspan=4, padx=25, sticky="ew")
-        for i in range(4):
-            cards_row.grid_columnconfigure(i, weight=1)
+        # 2x2 Metric Cards
+        cards_frame = ctk.CTkFrame(wrapper, fg_color="transparent")
+        cards_frame.grid(row=2, column=0, padx=35, sticky="ew")
+        cards_frame.grid_columnconfigure((0, 1), weight=1)
 
         counts = _fetch_severity_counts()
-        card_defs = [
-            ("CRITICAL", counts["CRITICAL"], CLR_CRITICAL),
-            ("HIGH",     counts["HIGH"],     CLR_HIGH),
-            ("MEDIUM",   counts["MEDIUM"],   CLR_MEDIUM),
-            ("LOW",      counts["LOW"],      CLR_LOW),
-        ]
-        for col, (label, val, clr) in enumerate(card_defs):
-            MetricCard(cards_row, label=label, value=val, accent=clr).grid(
-                row=0, column=col, padx=6, pady=4, sticky="nsew",
-            )
+        MetricCard(cards_frame, "CRITICAL", counts["CRITICAL"], CLR_CRITICAL).grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+        MetricCard(cards_frame, "HIGH", counts["HIGH"], CLR_HIGH).grid(row=0, column=1, padx=10, pady=10, sticky="nsew")
+        MetricCard(cards_frame, "MEDIUM", counts["MEDIUM"], CLR_MEDIUM).grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
+        MetricCard(cards_frame, "LOW", counts["LOW"], CLR_LOW).grid(row=1, column=1, padx=10, pady=10, sticky="nsew")
 
-        # ── Recent findings table ──────────────────────────────────────
-        ctk.CTkLabel(
-            wrapper, text="Recent Findings",
-            font=ctk.CTkFont(*FONT_H2), text_color=TXT_PRIMARY, anchor="w",
-        ).grid(row=3, column=0, padx=30, pady=(24, 8), sticky="w")
-
-        table_outer = ctk.CTkFrame(
-            wrapper, fg_color=BG_CARD,
-            corner_radius=CARD_RADIUS, border_color=BORDER_SUBTLE, border_width=1,
-        )
-        table_outer.grid(row=4, column=0, columnspan=4, padx=25, pady=(0, 20), sticky="ew")
-        table_outer.grid_columnconfigure(0, weight=1)
-
-        # Headers
-        hdr_frame = ctk.CTkFrame(table_outer, fg_color=BG_INPUT, corner_radius=0)
-        hdr_frame.grid(row=0, column=0, sticky="ew", padx=1, pady=(1, 0))
-        headers = ["ID", "Target", "Vulnerability", "Severity", "Status", "Detected"]
-        col_weights = [0, 0, 1, 0, 0, 0]
-        for c, (h, w) in enumerate(zip(headers, col_weights)):
-            hdr_frame.grid_columnconfigure(c, weight=w)
-            ctk.CTkLabel(
-                hdr_frame, text=h,
-                font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
-                text_color=TXT_DIM, anchor="w",
-            ).grid(row=0, column=c, padx=14, pady=8, sticky="w")
+        # Table
+        table_frame = ctk.CTkFrame(wrapper, fg_color=BG_CARD, corner_radius=15, border_color=BORDER_SUBTLE, border_width=1)
+        table_frame.grid(row=3, column=0, padx=45, pady=(30, 40), sticky="ew")
+        table_frame.grid_columnconfigure(2, weight=1)
 
         findings = _fetch_all_findings()
-        for r, f in enumerate(findings, start=1):
+        for r, f in enumerate(findings[:10], start=1):
             fid, tid, vuln, sev, status, ts = f
             sev_upper = (sev or "").upper()
             clr = SEVERITY_COLORS.get(sev_upper, TXT_SECONDARY)
-            row_bg = BG_CARD if r % 2 == 0 else "#0F1729"
 
-            row_frame = ctk.CTkFrame(table_outer, fg_color=row_bg, corner_radius=0)
-            row_frame.grid(row=r, column=0, sticky="ew", padx=1)
-            for c, w in enumerate(col_weights):
-                row_frame.grid_columnconfigure(c, weight=w)
-
-            vals = [str(fid), str(tid), vuln or "", sev_upper, status or "", ts or ""]
-            for c, v in enumerate(vals):
-                if c == 3:  # severity pill
-                    pill = SeverityPill(row_frame, text=v, color=clr)
-                    pill.grid(row=0, column=c, padx=14, pady=5, sticky="w")
-                else:
-                    tc = TXT_PRIMARY if c == 2 else TXT_SECONDARY
-                    ctk.CTkLabel(
-                        row_frame, text=v,
-                        font=ctk.CTkFont(*FONT_SMALL), text_color=tc, anchor="w",
-                    ).grid(row=0, column=c, padx=14, pady=6, sticky="w")
-
-        if not findings:
-            ctk.CTkLabel(
-                table_outer, text="No findings recorded yet. Run an audit to populate.",
-                font=ctk.CTkFont(*FONT_BODY), text_color=TXT_DIM,
-            ).grid(row=1, column=0, padx=20, pady=30)
+            ctk.CTkLabel(table_frame, text=f"#{fid}", font=ctk.CTkFont(*FONT_BODY), text_color=TXT_SECONDARY).grid(row=r, column=0, padx=20, pady=10, sticky="w")
+            SeverityPill(table_frame, text=sev_upper, color=clr).grid(row=r, column=1, padx=20, pady=10, sticky="w")
+            ctk.CTkLabel(table_frame, text=vuln, font=ctk.CTkFont(*FONT_BODY), text_color=TXT_PRIMARY).grid(row=r, column=2, padx=20, pady=10, sticky="w")
 
     # ╔══════════════════════════════════════════════════════════════════╗
-    # ║  SCANNER VIEW                                                   ║
+    # ║  SCANNER INTERFACE (War Room)                                   ║
     # ╚══════════════════════════════════════════════════════════════════╝
 
     def show_scanner(self):
         self._clear_content()
-        self._activate_nav(self.btn_scan)
 
         wrapper = ctk.CTkFrame(self.content, fg_color=BG_ROOT, corner_radius=0)
         wrapper.grid(row=0, column=0, sticky="nsew")
-        wrapper.grid_rowconfigure(4, weight=1)
         wrapper.grid_columnconfigure(0, weight=1)
+        wrapper.grid_rowconfigure(4, weight=1)
 
+        header_frame = ctk.CTkFrame(wrapper, fg_color="transparent")
+        header_frame.grid(row=0, column=0, padx=40, pady=(40, 20), sticky="ew")
+        header_frame.grid_columnconfigure(1, weight=1)
+        
         ctk.CTkLabel(
-            wrapper, text="Vulnerability Scanner",
+            header_frame, text="Vulnerability Scanner",
             font=ctk.CTkFont(*FONT_H1), text_color=TXT_PRIMARY, anchor="w",
-        ).grid(row=0, column=0, padx=30, pady=(28, 4), sticky="w")
+        ).grid(row=0, column=0, sticky="w")
 
-        ctk.CTkLabel(
-            wrapper, text="Select a scan type and configure target parameters",
-            font=ctk.CTkFont(*FONT_BODY), text_color=TXT_MUTED, anchor="w",
-        ).grid(row=0, column=0, padx=30, pady=(56, 0), sticky="w")
-
-        # ── Scan type segment ──────────────────────────────────────────
-        self._scan_mode = ctk.StringVar(value="ssrf")
-
-        seg_frame = ctk.CTkFrame(wrapper, fg_color="transparent")
-        seg_frame.grid(row=1, column=0, padx=25, pady=(18, 0), sticky="w")
-
-        modes = [
-            ("ssrf", "🌐  SSRF Web Audit"),
-            ("iac",  "🏗️  IaC Config Audit"),
-            ("net",  "🖥️  Network Audit"),
-        ]
-        for i, (val, label) in enumerate(modes):
-            ctk.CTkRadioButton(
-                seg_frame, text=label, variable=self._scan_mode, value=val,
-                font=ctk.CTkFont(*FONT_BODY), text_color=TXT_SECONDARY,
-                fg_color=ACCENT_INDIGO, hover_color=ACCENT_INDIGO,
-                border_color=BORDER_SUBTLE,
-            ).grid(row=0, column=i, padx=(0, 24), pady=8)
-
-        # ── Input area ─────────────────────────────────────────────────
-        input_card = ctk.CTkFrame(
-            wrapper, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
-            border_color=BORDER_SUBTLE, border_width=1,
+        self.pulse_lbl = ctk.CTkLabel(
+            header_frame, text="● IDLE",
+            font=ctk.CTkFont(*FONT_SUB), text_color=TXT_SECONDARY,
         )
-        input_card.grid(row=2, column=0, padx=25, pady=12, sticky="ew")
-        input_card.grid_columnconfigure(0, weight=1)
+        self.pulse_lbl.grid(row=0, column=1, sticky="e")
 
-        ctk.CTkLabel(
-            input_card, text="Target",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
-            text_color=TXT_MUTED, anchor="w",
-        ).grid(row=0, column=0, padx=18, pady=(14, 2), sticky="w")
+        # Segmented Control
+        self._scan_mode = ctk.StringVar(value="ssrf")
+        seg_frame = ctk.CTkFrame(wrapper, fg_color="transparent")
+        seg_frame.grid(row=1, column=0, padx=40, pady=(0, 20), sticky="w")
+
+        def _update_segment(*args):
+            for rb in rbs:
+                if rb.cget("value") == self._scan_mode.get():
+                    rb.configure(text_color=CTA_PRIMARY_TXT)
+                else:
+                    rb.configure(text_color=TXT_SECONDARY)
+
+        rbs = []
+        for i, (val, txt) in enumerate([("ssrf", "SSRF Web Audit"), ("iac", "IaC Config Audit"), ("net", "Full Network Audit")]):
+            rb = ctk.CTkRadioButton(
+                seg_frame, text=txt, variable=self._scan_mode, value=val,
+                font=ctk.CTkFont(*FONT_BODY), text_color=TXT_SECONDARY if i>0 else CTA_PRIMARY_TXT,
+                fg_color=CTA_PRIMARY_TXT, hover_color=CTA_PRIMARY_TXT, command=_update_segment
+            )
+            rb.grid(row=0, column=i, padx=(0, 30))
+            rbs.append(rb)
+
+        # Input & Button
+        input_frame = ctk.CTkFrame(wrapper, fg_color="transparent")
+        input_frame.grid(row=2, column=0, padx=40, pady=10, sticky="ew")
+        input_frame.grid_columnconfigure(0, weight=1)
 
         self.scan_entry = ctk.CTkEntry(
-            input_card, height=40,
-            placeholder_text="e.g.  http://host/api?url=test   or   ./infrastructure/",
+            input_frame, height=45, corner_radius=8,
             fg_color=BG_INPUT, border_color=BORDER_SUBTLE, border_width=1,
-            corner_radius=BTN_RADIUS,
+            placeholder_text="Enter target URL or path (e.g. http://host/api or ./infra)",
             font=ctk.CTkFont(*FONT_BODY), text_color=TXT_PRIMARY,
         )
-        self.scan_entry.grid(row=1, column=0, padx=18, pady=(0, 4), sticky="ew")
+        self.scan_entry.grid(row=0, column=0, sticky="ew", padx=(0, 20))
 
-        self.start_btn = ctk.CTkButton(
-            input_card, text="▶  START SCAN", height=40, width=170,
-            corner_radius=BTN_RADIUS,
-            fg_color=ACCENT_INDIGO, hover_color="#4F46E5",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"),
-            command=self._dispatch_scan,
+        self.start_btn = AnimatedButton(
+            input_frame, base_bg=CTA_PRIMARY_BG, hover_bg=CTA_PRIMARY_BG_HOV,
+            base_txt=CTA_PRIMARY_TXT, hover_txt=CTA_PRIMARY_TXT_HOV,
+            text="START SCAN", height=45, width=150, corner_radius=8,
+            font=ctk.CTkFont(*FONT_BTN), command=self._dispatch_scan
         )
-        self.start_btn.grid(row=1, column=1, padx=(4, 18), pady=(0, 4))
+        self.start_btn.grid(row=0, column=1)
 
-        # ── Live console ───────────────────────────────────────────────
-        ctk.CTkLabel(
-            wrapper, text="Live Console",
-            font=ctk.CTkFont(*FONT_H3), text_color=TXT_MUTED, anchor="w",
-        ).grid(row=3, column=0, padx=30, pady=(8, 2), sticky="w")
-
-        console_card = ctk.CTkFrame(
-            wrapper, fg_color=BG_CONSOLE, corner_radius=CARD_RADIUS,
+        # Live Terminal
+        self.terminal = ctk.CTkTextbox(
+            wrapper, fg_color="#000000", corner_radius=12,
             border_color=BORDER_SUBTLE, border_width=1,
+            font=ctk.CTkFont(*FONT_TERM), text_color=TXT_TERM, wrap="word"
         )
-        console_card.grid(row=4, column=0, padx=25, pady=(0, 20), sticky="nsew")
-        console_card.grid_rowconfigure(0, weight=1)
-        console_card.grid_columnconfigure(0, weight=1)
+        self.terminal.grid(row=4, column=0, padx=40, pady=(20, 40), sticky="nsew")
+        
+        # Configure text tags for colored logs directly on the underlying tk.Text widget
+        self.terminal._textbox.tag_config("info", foreground=TXT_TERM)
+        self.terminal._textbox.tag_config("vuln", foreground=CLR_CRITICAL)
+        self.terminal._textbox.tag_config("success", foreground=CLR_SAFE)
+        
+        self._term_write("[INFO] Terminal initialized. Waiting for task...", "info")
+        self.terminal.configure(state="disabled")
 
-        self.console_box = ctk.CTkTextbox(
-            console_card, fg_color=BG_CONSOLE,
-            text_color=CLR_SAFE, corner_radius=0,
-            font=ctk.CTkFont(family="Consolas", size=12),
-            wrap="word",
-        )
-        self.console_box.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
-        self._console_write("[INFO]  Scanner ready. Configure target and press START SCAN.\n")
-        self.console_box.configure(state="disabled")
-
-    def _console_write(self, text: str):
-        """Append styled text to the console box (thread-safe)."""
+    def _term_write(self, text: str, tag: str = "info"):
         def _do():
-            self.console_box.configure(state="normal")
-            self.console_box.insert("end", text)
-            self.console_box.see("end")
-            self.console_box.configure(state="disabled")
+            self.terminal.configure(state="normal")
+            self.terminal.insert("end", text + "\n", tag)
+            self.terminal.see("end")
+            self.terminal.configure(state="disabled")
         if threading.current_thread() is threading.main_thread():
             _do()
         else:
@@ -527,13 +516,18 @@ class AntiFineApp(ctk.CTk):
         target = self.scan_entry.get().strip()
 
         if mode in ("ssrf", "iac") and not target:
-            self._console_write("[WARN]  Please enter a target before starting.\n")
+            self._term_write("[ERROR] Target required for this scan mode.", "vuln")
             return
 
-        self.start_btn.configure(state="disabled", text="⏳  SCANNING…")
+        self.start_btn.configure(state="disabled")
+        self.pulse_lbl.configure(text="● RUNNING")
+        self._pulse_indicator(self.pulse_lbl, active=True)
+        self.terminal.configure(state="normal")
+        self.terminal.delete("1.0", "end")
+        self.terminal.configure(state="disabled")
 
         def _worker():
-            self._console_write(f"\n[INFO]  Starting {mode.upper()} scan…\n")
+            self._term_write(f"[INFO] Initiating {mode.upper()} scan...", "info")
             buf = io.StringIO()
             try:
                 with redirect_stdout(buf), redirect_stderr(buf):
@@ -547,20 +541,29 @@ class AntiFineApp(ctk.CTk):
                         from src.main import run_audit_local
                         run_audit_local()
             except Exception as exc:
-                self._console_write(f"[VULN]  Error: {exc}\n")
+                self._term_write(f"[ERROR] {exc}", "vuln")
 
-            output = buf.getvalue()
-            if output.strip():
-                for line in output.strip().splitlines():
-                    tag = "[INFO]"
+            out = buf.getvalue()
+            if out:
+                for line in out.strip().splitlines():
+                    t = "info"
                     if "error" in line.lower() or "insecure" in line.lower():
-                        tag = "[VULN]"
-                    elif "ok" in line.lower():
-                        tag = "[SUCCESS]"
-                    self._console_write(f"{tag}  {line}\n")
+                        t = "vuln"
+                        line = f"[-] {line}"
+                    elif "ok" in line.lower() or "success" in line.lower():
+                        t = "success"
+                        line = f"[+] {line}"
+                    else:
+                        line = f"[*] {line}"
+                    self._term_write(line, t)
 
-            self._console_write("[SUCCESS]  Scan complete.\n")
-            self.after(0, lambda: self.start_btn.configure(state="normal", text="▶  START SCAN"))
+            self._term_write("[SUCCESS] Scan sequence terminated.", "success")
+            
+            def _reset():
+                self.start_btn.configure(state="normal")
+                self.pulse_lbl.configure(text="● IDLE")
+                self._pulse_indicator(self.pulse_lbl, active=False)
+            self.after(0, _reset)
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -570,155 +573,91 @@ class AntiFineApp(ctk.CTk):
 
     def show_reports(self):
         self._clear_content()
-        self._activate_nav(self.btn_rpt)
 
         wrapper = ctk.CTkFrame(self.content, fg_color=BG_ROOT, corner_radius=0)
         wrapper.grid(row=0, column=0, sticky="nsew")
-        wrapper.grid_rowconfigure(3, weight=1)
+        wrapper.grid_rowconfigure(2, weight=1)
         wrapper.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
-            wrapper, text="Reports & SARIF Export",
+            wrapper, text="Reports & SARIF",
             font=ctk.CTkFont(*FONT_H1), text_color=TXT_PRIMARY, anchor="w",
-        ).grid(row=0, column=0, columnspan=2, padx=30, pady=(28, 4), sticky="w")
-
+        ).grid(row=0, column=0, padx=40, pady=(40, 5), sticky="w")
         ctk.CTkLabel(
-            wrapper, text="Generate compliance reports and CI/CD-ready SARIF files",
-            font=ctk.CTkFont(*FONT_BODY), text_color=TXT_MUTED, anchor="w",
-        ).grid(row=0, column=0, padx=30, pady=(56, 0), sticky="w")
+            wrapper, text="Generate and export compliance evidence.",
+            font=ctk.CTkFont(*FONT_SUB), text_color=TXT_SECONDARY, anchor="w",
+        ).grid(row=1, column=0, padx=40, pady=(0, 30), sticky="w")
 
-        # Status indicator
-        self.rpt_status = ctk.CTkLabel(
-            wrapper, text="",
-            font=ctk.CTkFont(*FONT_BODY), text_color=CLR_SAFE,
-        )
-        self.rpt_status.grid(row=1, column=0, columnspan=2, padx=30, pady=(10, 0), sticky="w")
+        content_frame = ctk.CTkFrame(wrapper, fg_color="transparent")
+        content_frame.grid(row=2, column=0, padx=40, sticky="nsew")
+        content_frame.grid_columnconfigure(0, weight=1)
+        content_frame.grid_rowconfigure(1, weight=1)
 
-        # ── Report cards ───────────────────────────────────────────────
-        cards_row = ctk.CTkFrame(wrapper, fg_color="transparent")
-        cards_row.grid(row=2, column=0, columnspan=2, padx=25, pady=14, sticky="ew")
-        cards_row.grid_columnconfigure(0, weight=1)
-        cards_row.grid_columnconfigure(1, weight=1)
+        actions_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
+        actions_frame.grid(row=0, column=0, sticky="ew")
 
-        # Markdown card
-        md_card = ctk.CTkFrame(
-            cards_row, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
-            border_color=BORDER_SUBTLE, border_width=1,
-        )
-        md_card.grid(row=0, column=0, padx=6, pady=4, sticky="nsew")
-        md_card.grid_columnconfigure(0, weight=1)
+        AnimatedButton(
+            actions_frame, base_bg=CTA_SECONDARY_BG, hover_bg=CTA_SECONDARY_BG_HOV,
+            base_txt=CTA_SECONDARY_TXT, hover_txt=CTA_SECONDARY_TXT_HOV,
+            text="Generate Markdown", height=45, corner_radius=8,
+            font=ctk.CTkFont(*FONT_BTN), command=self._gen_markdown
+        ).grid(row=0, column=0, padx=(0, 20))
 
-        ctk.CTkLabel(
-            md_card, text="📝  Markdown Compliance Report",
-            font=ctk.CTkFont(*FONT_H3), text_color=TXT_PRIMARY, anchor="w",
-        ).grid(row=0, column=0, padx=20, pady=(20, 4), sticky="w")
+        AnimatedButton(
+            actions_frame, base_bg=CTA_PRIMARY_BG, hover_bg=CTA_PRIMARY_BG_HOV,
+            base_txt=CTA_PRIMARY_TXT, hover_txt=CTA_PRIMARY_TXT_HOV,
+            text="Export SARIF", height=45, corner_radius=8,
+            font=ctk.CTkFont(*FONT_BTN), command=self._gen_sarif
+        ).grid(row=0, column=1)
 
-        ctk.CTkLabel(
-            md_card, text="Generates a structured compliance_report.md\nwith severity breakdown and remediation guidance.",
-            font=ctk.CTkFont(*FONT_SMALL), text_color=TXT_MUTED, anchor="w", justify="left",
-        ).grid(row=1, column=0, padx=20, pady=(0, 12), sticky="w")
-
-        ctk.CTkButton(
-            md_card, text="Generate Markdown", height=38,
-            corner_radius=BTN_RADIUS,
-            fg_color=ACCENT_INDIGO, hover_color="#4F46E5",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"),
-            command=self._gen_markdown,
-        ).grid(row=2, column=0, padx=20, pady=(0, 20), sticky="w")
-
-        # SARIF card
-        sarif_card = ctk.CTkFrame(
-            cards_row, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
-            border_color=BORDER_SUBTLE, border_width=1,
-        )
-        sarif_card.grid(row=0, column=1, padx=6, pady=4, sticky="nsew")
-        sarif_card.grid_columnconfigure(0, weight=1)
-
-        ctk.CTkLabel(
-            sarif_card, text="📦  SARIF 2.1.0 Export",
-            font=ctk.CTkFont(*FONT_H3), text_color=TXT_PRIMARY, anchor="w",
-        ).grid(row=0, column=0, padx=20, pady=(20, 4), sticky="w")
-
-        ctk.CTkLabel(
-            sarif_card, text="Exports findings to SARIF JSON for native\nintegration into GitHub Code Scanning & SOC tools.",
-            font=ctk.CTkFont(*FONT_SMALL), text_color=TXT_MUTED, anchor="w", justify="left",
-        ).grid(row=1, column=0, padx=20, pady=(0, 12), sticky="w")
-
-        ctk.CTkButton(
-            sarif_card, text="Export SARIF", height=38,
-            corner_radius=BTN_RADIUS,
-            fg_color=ACCENT_CYAN, hover_color="#0891B2",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"),
-            command=self._gen_sarif,
-        ).grid(row=2, column=0, padx=20, pady=(0, 20), sticky="w")
-
-        # ── Preview panel ──────────────────────────────────────────────
-        ctk.CTkLabel(
-            wrapper, text="Report Preview",
-            font=ctk.CTkFont(*FONT_H3), text_color=TXT_MUTED, anchor="w",
-        ).grid(row=3, column=0, padx=30, pady=(8, 2), sticky="nw")
+        self.rpt_status = ctk.CTkLabel(actions_frame, text="", font=ctk.CTkFont(*FONT_SUB))
+        self.rpt_status.grid(row=0, column=2, padx=30)
 
         self.preview_box = ctk.CTkTextbox(
-            wrapper, fg_color=BG_CONSOLE, corner_radius=CARD_RADIUS,
+            content_frame, fg_color=BG_CARD, corner_radius=12,
             border_color=BORDER_SUBTLE, border_width=1,
-            font=ctk.CTkFont(family="Consolas", size=11),
-            text_color=TXT_SECONDARY, wrap="word",
+            font=ctk.CTkFont(*FONT_TERM), text_color=TXT_SECONDARY, wrap="word"
         )
-        self.preview_box.grid(row=4, column=0, columnspan=2, padx=25, pady=(0, 20), sticky="nsew")
-        wrapper.grid_rowconfigure(4, weight=1)
+        self.preview_box.grid(row=1, column=0, pady=(30, 40), sticky="nsew")
+        
+        self._load_report_preview()
 
-        # Load existing report if available
+    def _load_report_preview(self):
         report_path = PROJECT_ROOT / "compliance_report.md"
+        self.preview_box.configure(state="normal")
+        self.preview_box.delete("1.0", "end")
         if report_path.is_file():
             try:
-                text = report_path.read_text(encoding="utf-8")[:3000]
-                self.preview_box.insert("end", text)
+                self.preview_box.insert("end", report_path.read_text(encoding="utf-8")[:3000])
             except Exception:
                 pass
         else:
-            self.preview_box.insert("end", "No report generated yet. Click 'Generate Markdown' above.")
+            self.preview_box.insert("end", "No report generated yet.")
         self.preview_box.configure(state="disabled")
 
     def _gen_markdown(self):
         try:
             from src.reporting.generate import generate_report
             path, count = generate_report()
-            self.rpt_status.configure(
-                text=f"✔  Markdown report generated: {path.name}  ({count} findings)",
-                text_color=CLR_SAFE,
-            )
-            # Refresh preview
-            self.preview_box.configure(state="normal")
-            self.preview_box.delete("1.0", "end")
-            text = path.read_text(encoding="utf-8")[:3000]
-            self.preview_box.insert("end", text)
-            self.preview_box.configure(state="disabled")
+            self.rpt_status.configure(text=f"✔ Markdown generated ({count} findings)", text_color=CLR_SAFE)
+            self._load_report_preview()
         except Exception as exc:
-            self.rpt_status.configure(text=f"✘  Error: {exc}", text_color=CLR_CRITICAL)
+            self.rpt_status.configure(text=f"✘ Error: {exc}", text_color=CLR_CRITICAL)
 
     def _gen_sarif(self):
         try:
             from src.reporting.sarif_exporter import export_to_sarif
             code = export_to_sarif("results.sarif")
             if code == 0:
-                self.rpt_status.configure(
-                    text="✔  SARIF report exported: results.sarif",
-                    text_color=CLR_SAFE,
-                )
+                self.rpt_status.configure(text="✔ SARIF exported", text_color=CLR_SAFE)
             else:
-                self.rpt_status.configure(
-                    text="✘  SARIF export returned a non-zero code.",
-                    text_color=CLR_CRITICAL,
-                )
+                self.rpt_status.configure(text="✘ SARIF export failed", text_color=CLR_CRITICAL)
         except Exception as exc:
-            self.rpt_status.configure(text=f"✘  Error: {exc}", text_color=CLR_CRITICAL)
-
+            self.rpt_status.configure(text=f"✘ Error: {exc}", text_color=CLR_CRITICAL)
 
 def launch_gui():
-    """Entry point to start the desktop application."""
     app = AntiFineApp()
     app.mainloop()
-
 
 if __name__ == "__main__":
     launch_gui()
