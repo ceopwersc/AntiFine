@@ -19,6 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from database.setup import initialize_database  # noqa: E402  (needs sys.path above)
 from src.reporting.generate import ReportError, generate_report  # noqa: E402
+from src.reporting.sarif_exporter import export_to_sarif  # noqa: E402
 from src.scanners.baseline_audit import (  # noqa: E402
     ScannerError,
     format_summary,
@@ -78,6 +79,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--report",
         action="store_true",
         help="Generate the Markdown compliance report from recorded findings.",
+    )
+    parser.add_argument(
+        "--export-sarif",
+        metavar="FILE",
+        help="Export the compliance findings into SARIF 2.1.0 JSON format.",
     )
     return parser
 
@@ -162,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if not (
-        args.init or args.audit or args.audit_local or args.audit_web or args.report
+        args.init or args.audit or args.audit_local or args.audit_web or args.report or args.export_sarif
     ):
         parser.print_help()
         return 0
@@ -188,6 +194,10 @@ def main(argv: list[str] | None = None) -> int:
             return exit_code
     if args.report:
         exit_code = run_report()
+        if exit_code != 0:
+            return exit_code
+    if args.export_sarif:
+        exit_code = export_to_sarif(args.export_sarif)
 
     return exit_code
 
