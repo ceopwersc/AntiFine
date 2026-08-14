@@ -5,18 +5,7 @@ const apiClient = axios.create({
 });
 
 export const fetchDashboardStats = async () => {
-  // In a real app, this would hit the API
-  // return (await apiClient.get('/stats')).data;
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      resolve({
-        critical: 2,
-        high: 14,
-        medium: 38,
-        low: 102
-      });
-    }, 500);
-  });
+  return (await apiClient.get('/dashboard')).data;
 };
 
 export const runScan = async (target: string, type: string) => {

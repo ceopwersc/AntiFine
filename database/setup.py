@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS scan_results (
     vulnerability_type TEXT,
     severity TEXT,
     status TEXT,
+    compliance_framework TEXT,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 )
 """
@@ -54,6 +55,14 @@ def initialize_database(db_path: Path = DB_PATH) -> Path:
             cursor = connection.cursor()
             cursor.execute(AUDIT_TARGETS_DDL)
             cursor.execute(SCAN_RESULTS_DDL)
+            
+            # Add compliance_framework column to existing databases
+            try:
+                cursor.execute("ALTER TABLE scan_results ADD COLUMN compliance_framework TEXT")
+            except sqlite3.OperationalError:
+                # Column might already exist, which is fine
+                pass
+                
             connection.commit()
     except sqlite3.Error as exc:
         raise sqlite3.Error(f"Failed to initialize database at {db_path}: {exc}") from exc
