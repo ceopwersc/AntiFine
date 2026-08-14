@@ -86,6 +86,59 @@ def _dispatch_alerts_for_rows(rows: list, background_tasks: BackgroundTasks):
 
 # ── Endpoints ───────────────────────────────────────────────────────────────
 
+@app.get("/api/analytics/dashboard")
+async def get_analytics_dashboard() -> Dict[str, Any]:
+    if not DB_PATH.is_file():
+        return {
+            "status": "ok", 
+            "overall_compliance_score": 100,
+            "severity_breakdown": [
+                {"name": "Critical", "value": 0},
+                {"name": "High", "value": 0},
+                {"name": "Medium", "value": 0},
+                {"name": "Low", "value": 0}
+            ],
+            "historical_trends": []
+        }
+    
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            # 1. Overall Compliance Score
+            failures = conn.execute(
+                "SELECT COUNT(*) FROM scan_results WHERE compliance_framework IS NOT NULL AND compliance_framework != 'Unmapped' AND status='OPEN'"
+            ).fetchone()[0]
+            score = max(0, 100 - (failures * 5))
+            
+            # 2. Severity Breakdown
+            counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+            rows = conn.execute(
+                "SELECT UPPER(severity) AS sev, COUNT(*) FROM scan_results WHERE status='OPEN' GROUP BY sev"
+            ).fetchall()
+            for sev, cnt in rows:
+                if sev in counts:
+                    counts[sev] = cnt
+            severity_breakdown = [
+                {"name": "Critical", "value": counts["CRITICAL"]},
+                {"name": "High", "value": counts["HIGH"]},
+                {"name": "Medium", "value": counts["MEDIUM"]},
+                {"name": "Low", "value": counts["LOW"]},
+            ]
+            
+            # 3. Historical Trends (last 7 dates with data)
+            trend_rows = conn.execute(
+                "SELECT DATE(timestamp) as date, COUNT(*) FROM scan_results GROUP BY date ORDER BY date DESC LIMIT 7"
+            ).fetchall()
+            historical_trends = [{"date": r[0], "count": r[1]} for r in reversed(trend_rows)]
+            
+            return {
+                "status": "ok",
+                "overall_compliance_score": score,
+                "severity_breakdown": severity_breakdown,
+                "historical_trends": historical_trends
+            }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
 @app.get("/api/dashboard")
 async def get_dashboard() -> Dict[str, Any]:
     """Return an aggregated summary of vulnerabilities from the database."""

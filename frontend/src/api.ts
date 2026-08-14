@@ -48,3 +48,7 @@ export const saveWebhook = async (url: string, min_severity: string) => {
 export const testWebhook = async (url: string) => {
   return (await apiClient.post('/integrations/test', { url })).data;
 };
+
+export const fetchAnalyticsDashboard = async () => {
+  return (await apiClient.get('/analytics/dashboard')).data;
+};
