@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Dict, Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
@@ -25,6 +25,7 @@ from src.scanners.iac_audit import run_iac_audit
 from src.scanners.compliance_mapper import map_finding_to_framework
 from src.reporting.generate import generate_report
 from src.reporting.sarif_exporter import export_to_sarif
+from src.integrations.soc_dispatcher import dispatch_security_alert
 
 
 # ── Initialization ──────────────────────────────────────────────────────────
@@ -53,6 +54,34 @@ class SSRFScanRequest(BaseModel):
 
 class IaCScanRequest(BaseModel):
     target_path: str
+
+class WebhookModel(BaseModel):
+    url: str
+    min_severity: str = "HIGH"
+
+class WebhookTestModel(BaseModel):
+    url: str
+
+def _dispatch_alerts_for_rows(rows: list, background_tasks: BackgroundTasks):
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            webhooks = conn.execute("SELECT url, min_severity FROM webhooks").fetchall()
+    except Exception:
+        webhooks = []
+        
+    if not webhooks:
+        return
+        
+    for row in rows:
+        target_id, vuln_type, severity, status, framework = row
+        for url, min_severity in webhooks:
+            if severity.upper() == "CRITICAL" or severity.upper() == min_severity.upper() or min_severity.upper() == "ALL":
+                finding_dict = {
+                    "vulnerability_type": vuln_type,
+                    "severity": severity,
+                    "compliance_tags": framework
+                }
+                background_tasks.add_task(dispatch_security_alert, finding_dict, url)
 
 
 # ── Endpoints ───────────────────────────────────────────────────────────────
@@ -92,7 +121,7 @@ async def get_dashboard() -> Dict[str, Any]:
 
 
 @app.post("/api/scan/ssrf")
-async def run_ssrf_scan(req: SSRFScanRequest) -> Dict[str, Any]:
+async def run_ssrf_scan(req: SSRFScanRequest, background_tasks: BackgroundTasks) -> Dict[str, Any]:
     """Execute the SSRF scanner against a target URL."""
     try:
         # Trigger the web audit logic asynchronously
@@ -112,6 +141,7 @@ async def run_ssrf_scan(req: SSRFScanRequest) -> Dict[str, Any]:
                     rows,
                 )
                 conn.commit()
+            _dispatch_alerts_for_rows(rows, background_tasks)
                 
         return {"status": "success", "message": f"SSRF scan completed for {req.target_url}"}
     except Exception as exc:
@@ -119,7 +149,7 @@ async def run_ssrf_scan(req: SSRFScanRequest) -> Dict[str, Any]:
 
 
 @app.post("/api/scan/iac")
-async def run_iac_scan(req: IaCScanRequest) -> Dict[str, Any]:
+async def run_iac_scan(req: IaCScanRequest, background_tasks: BackgroundTasks) -> Dict[str, Any]:
     """Execute the IaC scanner against a local file or directory."""
     try:
         findings = run_iac_audit(req.target_path, persist=False)
@@ -137,10 +167,47 @@ async def run_iac_scan(req: IaCScanRequest) -> Dict[str, Any]:
                     rows,
                 )
                 conn.commit()
+            _dispatch_alerts_for_rows(rows, background_tasks)
                 
         return {"status": "success", "message": f"IaC scan completed for {req.target_path}"}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/api/integrations/webhooks")
+async def get_webhooks() -> Dict[str, Any]:
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            rows = conn.execute("SELECT id, url, min_severity FROM webhooks").fetchall()
+            webhooks = [{"id": r[0], "url": r[1], "min_severity": r[2]} for r in rows]
+            return {"status": "ok", "webhooks": webhooks}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+@app.post("/api/integrations/webhooks")
+async def save_webhook(req: WebhookModel) -> Dict[str, Any]:
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                "INSERT INTO webhooks (url, min_severity) VALUES (?, ?) "
+                "ON CONFLICT(url) DO UPDATE SET min_severity=excluded.min_severity",
+                (req.url, req.min_severity)
+            )
+            conn.commit()
+        return {"status": "success", "message": "Webhook saved"}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+@app.post("/api/integrations/test")
+async def test_webhook(req: WebhookTestModel, background_tasks: BackgroundTasks) -> Dict[str, Any]:
+    finding_dict = {
+        "vulnerability_type": "Test Alert - AntiFine System Check",
+        "severity": "CRITICAL",
+        "compliance_tags": "None",
+        "remediation_guidance": "Ignore this alert. It is a test."
+    }
+    background_tasks.add_task(dispatch_security_alert, finding_dict, req.url)
+    return {"status": "success", "message": "Test alert dispatched"}
 
 
 @app.post("/api/report/generate")

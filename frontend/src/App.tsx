@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { LayoutDashboard, Shield, FileText } from 'lucide-react';
+import { LayoutDashboard, Shield, FileText, Webhook } from 'lucide-react';
 import Dashboard from './components/Dashboard';
 import Scanner from './components/Scanner';
 import Reports from './components/Reports';
+import Integrations from './components/Integrations';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -12,6 +13,7 @@ export default function App() {
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'scanner', label: 'War Room', icon: Shield },
     { id: 'reports', label: 'Reports', icon: FileText },
+    { id: 'integrations', label: 'Integrations', icon: Webhook },
   ];
 
   const renderContent = () => {
@@ -19,6 +21,7 @@ export default function App() {
       case 'dashboard': return <Dashboard key="dashboard" />;
       case 'scanner': return <Scanner key="scanner" />;
       case 'reports': return <Reports key="reports" />;
+      case 'integrations': return <Integrations key="integrations" />;
       default: return null;
     }
   };

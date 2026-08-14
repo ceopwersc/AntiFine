@@ -1,2 +1,6 @@
 pytest
 rich
+fastapi
+uvicorn
+pydantic
+httpx

@@ -36,6 +36,13 @@ CREATE TABLE IF NOT EXISTS scan_results (
 )
 """
 
+WEBHOOKS_DDL: str = """
+CREATE TABLE IF NOT EXISTS webhooks (
+    id INTEGER PRIMARY KEY,
+    url TEXT UNIQUE NOT NULL,
+    min_severity TEXT DEFAULT 'HIGH'
+)
+"""
 
 def initialize_database(db_path: Path = DB_PATH) -> Path:
     """Create the AntiFine database and its tables if they do not exist.
@@ -55,6 +62,7 @@ def initialize_database(db_path: Path = DB_PATH) -> Path:
             cursor = connection.cursor()
             cursor.execute(AUDIT_TARGETS_DDL)
             cursor.execute(SCAN_RESULTS_DDL)
+            cursor.execute(WEBHOOKS_DDL)
             
             # Add compliance_framework column to existing databases
             try:

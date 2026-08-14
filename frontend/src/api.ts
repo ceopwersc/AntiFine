@@ -36,3 +36,15 @@ export const generateReport = async (format: string) => {
     }, 800);
   });
 };
+
+export const getWebhooks = async () => {
+  return (await apiClient.get('/integrations/webhooks')).data;
+};
+
+export const saveWebhook = async (url: string, min_severity: string) => {
+  return (await apiClient.post('/integrations/webhooks', { url, min_severity })).data;
+};
+
+export const testWebhook = async (url: string) => {
+  return (await apiClient.post('/integrations/test', { url })).data;
+};
