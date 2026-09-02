@@ -24,6 +24,39 @@ class FindingMetadata(TypedDict):
 
 _RULES: list[tuple] = [
 
+    # ── Informational: USER root in intermediate build stage ──────────────
+    (
+        lambda v: "informational" in v and (
+            "user root" in v or "no user directive" in v or "missing user" in v
+        ),
+        FindingMetadata(
+            primary_framework="CIS Docker Benchmark 4.1 (Informational)",
+            frameworks=[
+                "CIS Docker Benchmark 4.1 (Informational -- intermediate stage only)",
+                "NIST SP 800-190 §3.3.1",
+            ],
+            description=(
+                "A build or toolchain stage runs as root. This is common and acceptable "
+                "for package compilation, apt/yum installs, and filesystem setup. "
+                "This finding is informational only -- the final runtime image "
+                "must still specify a non-root USER directive."
+            ),
+            remediation=(
+                "# No immediate action required for intermediate (builder) stages.\n"
+                "# Ensure the FINAL stage switches to a non-root user:\n\n"
+                "FROM base-image AS builder\n"
+                "# root operations here are fine for toolchain setup\n"
+                "RUN apt-get install -y build-essential\n\n"
+                "FROM python:3.12-slim\n"
+                "COPY --from=builder /app /app\n"
+                "# Switch to non-root before the ENTRYPOINT\n"
+                "RUN groupadd -r appuser && useradd -r -g appuser appuser\n"
+                "USER appuser\n"
+                "ENTRYPOINT [\"python\", \"app.py\"]"
+            ),
+        ),
+    ),
+
     # ── USER root ─────────────────────────────────────────────────────────
     (
         lambda v: "user root" in v or "root user" in v,
@@ -221,7 +254,7 @@ _RULES: list[tuple] = [
     (
         lambda v: "ssrf" in v or "injection" in v,
         FindingMetadata(
-            primary_framework="OWASP Top 10, ISO 27001 Control A.14.2.5",
+            primary_framework="OWASP Top 10 A10:2021 – SSRF",
             frameworks=[
                 "OWASP Top 10 A10:2021 – SSRF",
                 "ISO 27001 A.14.2.5",

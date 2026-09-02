@@ -23,11 +23,12 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from database.setup import DB_PATH, initialize_database  # noqa: E402
 
+
 class IaCScannerError(RuntimeError):
     """Raised when the IaC audit fails."""
 
 
-# ── Shannon Entropy utilities ────────────────────────────────────────────
+# ── Shannon Entropy utilities ────────────────────────────────────────────────
 
 ENTROPY_MIN_LENGTH: int = 16   # minimum token length to consider
 ENTROPY_THRESHOLD: float = 3.8  # bits; tuned to catch base64/hex with low FP rate
@@ -36,7 +37,7 @@ ENTROPY_THRESHOLD: float = 3.8  # bits; tuned to catch base64/hex with low FP ra
 def calculate_entropy(data: str) -> float:
     """Compute Shannon entropy of *data* in bits per character.
 
-    Formula: H(X) = -Σ P(xᵢ) · log₂ P(xᵢ)
+    Formula: H(X) = -Sigma P(x_i) * log2 P(x_i)
 
     Returns 0.0 for empty or single-character strings.
     """
@@ -64,18 +65,16 @@ def _scan_value_for_entropy(
     for the entropy path, which keeps false-positive rates low on short values
     such as UUIDs or version strings.
     """
-    # Strip surrounding quotes for evaluation
-    stripped = value.strip('"\' \t')
+    stripped = value.strip('"\'  \t')
     if not stripped:
         return None
 
     h = calculate_entropy(stripped)
 
     if len(stripped) >= ENTROPY_MIN_LENGTH and h >= ENTROPY_THRESHOLD:
-        # Even if the key name is innocuous, the value is suspiciously high-entropy
         return (
             f"High Entropy Credential Exposure (Shannon H >= {ENTROPY_THRESHOLD}) "
-            f"in {filename} [{key_name}=… H={h:.2f}]",
+            f"in {filename} [{key_name}=... H={h:.2f}]",
             "HIGH",
         )
     return None
@@ -96,96 +95,210 @@ _UNPINNED_FROM_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Pattern to detect `FROM image AS stage_name` (the AS clause is optional)
+_FROM_STAGE_PATTERN = re.compile(
+    r"^FROM\s+"
+    r"(?P<image>[^\s:@]+)"
+    r"(?::(?P<tag>[^\s@]+))?"
+    r"(?:@sha256:\S+)?"
+    r"(?:\s+AS\s+(?P<alias>\S+))?",
+    re.IGNORECASE,
+)
 
-def analyze_dockerfile(content: str, filename: str) -> list[tuple[str, str]]:
-    """Scan a Dockerfile for security misconfigurations.
 
-    Checks for:
-    - USER root / missing USER directive             (CIS Docker 4.1)
-    - Missing HEALTHCHECK                            (CIS Docker 4.6)
-    - Hardcoded secrets in ENV instructions          (CIS Docker 4.7)
-    - Unpinned or ':latest'-tagged base image        (CIS Docker 4.3)
-    - High-entropy values in ENV/ARG instructions    (Shannon H ≥ 3.8)
+class DockerfileStage:
+    """Represents a single build stage within a multi-stage Dockerfile."""
+
+    __slots__ = ("index", "alias", "is_final", "lines", "line_indices")
+
+    def __init__(self, index: int, alias: str | None, is_final: bool) -> None:
+        self.index = index          # 0-based stage number
+        self.alias = alias          # e.g. "builder", or None for unnamed stages
+        self.is_final = is_final    # True only for the last FROM block
+        self.lines: list[str] = []          # raw stripped instruction lines
+        self.line_indices: list[int] = []   # corresponding original line indices
+
+    @property
+    def label(self) -> str:
+        if self.alias:
+            return f"stage:{self.alias}"
+        return f"stage:{self.index}"
+
+
+def _parse_dockerfile_stages(lines: list[str]) -> list[DockerfileStage]:
+    """Split a Dockerfile into its constituent build stages.
+
+    Returns a list of DockerfileStage objects.  The *last* stage in the list
+    has ``is_final=True``; all others are intermediate build stages.
+    Empty files or files with no FROM produce a single unnamed stage.
     """
-    findings: list[tuple[str, str]] = []
-    lines = content.splitlines()
-
-    has_user = False
-    has_healthcheck = False
-    # Track already-flagged lines so keyword + entropy don't double-report
-    keyword_flagged_lines: set[int] = set()
+    stages: list[DockerfileStage] = []
+    current: DockerfileStage | None = None
 
     for idx, raw_line in enumerate(lines):
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
 
-        upper = line.upper()
+        if line.upper().startswith("FROM "):
+            m = _FROM_STAGE_PATTERN.match(line)
+            alias = m.group("alias") if m else None
+            stage = DockerfileStage(
+                index=len(stages),
+                alias=alias,
+                is_final=False,   # corrected after the loop
+            )
+            stages.append(stage)
+            current = stage
 
-        # ── USER directive ───────────────────────────────────────────────
-        if upper.startswith("USER "):
-            has_user = True
-            user = line.split(" ", 1)[1].strip().lower()
-            if user in ("root", "0"):
-                findings.append(
-                    (f"Insecure Configuration (USER root) in {filename}", "HIGH")
-                )
+        if current is not None:
+            current.lines.append(line)
+            current.line_indices.append(idx)
 
-        # ── HEALTHCHECK directive ─────────────────────────────────────────
-        elif upper.startswith("HEALTHCHECK "):
-            has_healthcheck = True
+    if not stages:
+        # Fallback: treat the whole file as one unnamed stage
+        stage = DockerfileStage(index=0, alias=None, is_final=True)
+        for idx, raw_line in enumerate(lines):
+            line = raw_line.strip()
+            if line and not line.startswith("#"):
+                stage.lines.append(line)
+                stage.line_indices.append(idx)
+        return [stage]
 
-        # ── ENV / ARG secret detection (keyword name + entropy) ───────────────
-        elif upper.startswith("ENV ") or upper.startswith("ARG "):
-            # Parse key=value or "key value" forms
-            rest = line.split(" ", 1)[1] if " " in line else ""
-            # Normalise: handle both `ENV KEY value` and `ENV KEY=value`
-            if "=" in rest:
-                key, _, val = rest.partition("=")
-            else:
-                parts = rest.split(None, 1)
-                key = parts[0] if parts else ""
-                val = parts[1] if len(parts) > 1 else ""
+    stages[-1].is_final = True
+    return stages
 
-            key = key.strip()
-            val = val.strip()
 
-            # Stage 1 — keyword name match (CRITICAL)
-            if _SECRET_ENV_PATTERN.match(line):
-                findings.append(
-                    (f"Hardcoded Secret in ENV Instruction in {filename}", "CRITICAL")
-                )
-                keyword_flagged_lines.add(idx)
+def analyze_dockerfile(content: str, filename: str) -> list[tuple[str, str]]:
+    """Scan a Dockerfile for security misconfigurations with multi-stage awareness.
 
-            # Stage 2 — high-entropy value check (HIGH) — even for innocuous key names
-            if idx not in keyword_flagged_lines and val:
-                entropy_finding = _scan_value_for_entropy(val, key, filename)
-                if entropy_finding:
-                    findings.append(entropy_finding)
+    Stage-specific enforcement rules:
+    +-----------------------------+-------------------+---------------------+
+    | Check                       | Intermediate stage| Final (runtime) stage|
+    +-----------------------------+-------------------+---------------------+
+    | USER root (explicit)        | INFORMATIONAL     | HIGH                |
+    | Missing USER directive      | (not enforced)    | MEDIUM              |
+    | Missing HEALTHCHECK         | (not enforced)    | LOW                 |
+    | Hardcoded secret (keyword)  | CRITICAL          | CRITICAL            |
+    | High-entropy value (entropy)| HIGH              | HIGH                |
+    | Unpinned image tag          | MEDIUM            | MEDIUM              |
+    +-----------------------------+-------------------+---------------------+
 
-        # ── FROM unpinned image detection ──────────────────────────────────
-        elif upper.startswith("FROM "):
-            m = _UNPINNED_FROM_PATTERN.match(line)
-            if m:
-                tag = (m.group("tag") or "").lower()
-                image = m.group("image").lower()
-                # Skip scratch / local build-stage aliases
-                if image not in ("scratch",) and not line.upper().startswith("FROM --"):
-                    if tag in ("latest", "") or tag == "":
-                        findings.append(
-                            (f"Unpinned Image Tag (latest or missing) in {filename}", "MEDIUM")
-                        )
+    Rationale for INFORMATIONAL on intermediate stages:
+    - Build stages (compilers, package managers) legitimately need root access
+      to install system packages, modify /etc, and set up toolchains.
+    - The production/runtime image (final stage) must never run as root.
+    - Secrets and entropy checks apply to ALL stages — a leaked credential
+      baked into any layer is still a security exposure.
+    """
+    findings: list[tuple[str, str]] = []
+    lines = content.splitlines()
+    stages = _parse_dockerfile_stages(lines)
 
-    # ── Post-line checks ─────────────────────────────────────────────
-    if not has_user:
-        findings.append(
-            (f"Insecure Configuration (Missing USER) in {filename}", "MEDIUM")
-        )
+    multi_stage = len(stages) > 1
 
-    if not has_healthcheck:
-        findings.append(
-            (f"Insecure Configuration (Missing HEALTHCHECK) in {filename}", "LOW")
-        )
+    for stage in stages:
+        stage_label = stage.label
+        has_user = False
+        has_healthcheck = False
+        # Track global line indices where a keyword match fired so
+        # entropy scan doesn't double-report the same line.
+        keyword_flagged: set[int] = set()
+
+        for line, global_idx in zip(stage.lines, stage.line_indices):
+            upper = line.upper()
+
+            # ── USER directive ────────────────────────────────────────────
+            if upper.startswith("USER "):
+                has_user = True
+                user = line.split(" ", 1)[1].strip().lower()
+                if user in ("root", "0"):
+                    if stage.is_final:
+                        findings.append((
+                            f"Insecure Configuration (USER root) in {filename}",
+                            "HIGH",
+                        ))
+                    else:
+                        # Root in a build/toolchain stage is common practice;
+                        # downgrade to INFORMATIONAL so it's visible but not noisy.
+                        findings.append((
+                            f"Informational: USER root in intermediate build stage "
+                            f"({stage_label}) in {filename} "
+                            f"-- acceptable for toolchain/package-installation stages",
+                            "INFORMATIONAL",
+                        ))
+
+            # ── HEALTHCHECK directive ─────────────────────────────────────
+            elif upper.startswith("HEALTHCHECK "):
+                has_healthcheck = True
+
+            # ── ENV / ARG secret detection (keyword name + entropy) ───────
+            elif upper.startswith("ENV ") or upper.startswith("ARG "):
+                rest = line.split(" ", 1)[1] if " " in line else ""
+                if "=" in rest:
+                    key, _, val = rest.partition("=")
+                else:
+                    parts = rest.split(None, 1)
+                    key = parts[0] if parts else ""
+                    val = parts[1] if len(parts) > 1 else ""
+
+                key = key.strip()
+                val = val.strip()
+
+                # Stage 1 -- keyword name match (CRITICAL, any stage)
+                if _SECRET_ENV_PATTERN.match(line):
+                    findings.append((
+                        f"Hardcoded Secret in ENV Instruction in {filename}",
+                        "CRITICAL",
+                    ))
+                    keyword_flagged.add(global_idx)
+
+                # Stage 2 -- high-entropy value check (HIGH, any stage)
+                if global_idx not in keyword_flagged and val:
+                    ef = _scan_value_for_entropy(val, key, filename)
+                    if ef:
+                        findings.append(ef)
+
+            # ── FROM unpinned image (applies to every stage) ──────────────
+            elif upper.startswith("FROM "):
+                m = _UNPINNED_FROM_PATTERN.match(line)
+                if m:
+                    tag = (m.group("tag") or "").lower()
+                    image = m.group("image").lower()
+                    if image not in ("scratch",) and not upper.startswith("FROM --"):
+                        if tag in ("latest", ""):
+                            stage_ctx = (
+                                " [final stage]" if stage.is_final
+                                else f" [{stage_label}]"
+                            )
+                            findings.append((
+                                f"Unpinned Image Tag (latest or missing) in "
+                                f"{filename}{stage_ctx}",
+                                "MEDIUM",
+                            ))
+
+        # ── Post-stage checks ─────────────────────────────────────────────
+        if stage.is_final:
+            # Strict enforcement: the runtime image must specify a non-root user
+            if not has_user:
+                findings.append((
+                    f"Insecure Configuration (Missing USER) in {filename}",
+                    "MEDIUM",
+                ))
+            # Health checks only matter for the service that will run in production
+            if not has_healthcheck:
+                findings.append((
+                    f"Insecure Configuration (Missing HEALTHCHECK) in {filename}",
+                    "LOW",
+                ))
+        elif multi_stage and not has_user:
+            # Informational only: intermediate stages default to root, which is fine
+            findings.append((
+                f"Informational: No USER directive in intermediate build stage "
+                f"({stage_label}) in {filename} "
+                f"-- defaults to root, acceptable for build/compilation stages",
+                "INFORMATIONAL",
+            ))
 
     return findings
 

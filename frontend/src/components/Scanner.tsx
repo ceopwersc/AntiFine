@@ -23,10 +23,11 @@ interface ScanResult {
 
 // Severity → colour tokens
 const SEVERITY_COLOR: Record<string, { badge: string; border: string; glow: string }> = {
-  CRITICAL: { badge: 'text-red-500',    border: 'border-red-500/30',    glow: 'shadow-red-500/10' },
-  HIGH:     { badge: 'text-orange-400', border: 'border-orange-400/30', glow: 'shadow-orange-400/10' },
-  MEDIUM:   { badge: 'text-yellow-400', border: 'border-yellow-400/30', glow: 'shadow-yellow-400/10' },
-  LOW:      { badge: 'text-blue-400',   border: 'border-blue-400/30',   glow: 'shadow-blue-400/10' },
+  CRITICAL:      { badge: 'text-red-500',     border: 'border-red-500/30',     glow: 'shadow-red-500/10' },
+  HIGH:          { badge: 'text-orange-400',  border: 'border-orange-400/30',  glow: 'shadow-orange-400/10' },
+  MEDIUM:        { badge: 'text-yellow-400',  border: 'border-yellow-400/30',  glow: 'shadow-yellow-400/10' },
+  LOW:           { badge: 'text-blue-400',    border: 'border-blue-400/30',    glow: 'shadow-blue-400/10' },
+  INFORMATIONAL: { badge: 'text-purple-400',  border: 'border-purple-400/20',  glow: 'shadow-purple-400/5' },
 };
 
 function FindingCard({ finding, index }: { finding: Finding; index: number }) {
