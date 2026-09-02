@@ -321,7 +321,7 @@ async def test_webhook(req: WebhookTestModel, background_tasks: BackgroundTasks)
 async def export_iac_sarif() -> Dict[str, Any]:
     """Export all open IaC findings in SARIF 2.1.0 format."""
     try:
-        from src.reporters.sarif_exporter import generate_sarif
+        from src.reporting.sarif_exporter import generate_sarif
         if not DB_PATH.is_file():
             return generate_sarif([])
             
