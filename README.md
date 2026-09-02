@@ -13,22 +13,22 @@ AntiFine includes highly specialized scanners tailored for modern cloud-native e
 * **Kubernetes (PSS Enforcement)**: It structurally parses multi-document Kubernetes YAML manifests and strictly enforces the **Pod Security Standards (PSS) Restricted Profile**. It flags critical violations like containers running in privileged mode, host namespace sharing (`hostPID`/`hostNetwork`), missing read-only root filesystems, dangerous Linux capabilities (`CAP_SYS_ADMIN`), missing `runAsNonRoot`, and privilege escalation.
 * **Docker / Container Security**: It features **multi-stage build awareness**. It understands the difference between build-time compilation environments and the final runtime image—intelligently allowing `USER root` for package installations in early stages, but strictly forbidding it in the final production container layer. It also enforces health checks and image pinning.
 * **Secret Detection Engine**: It scans configuration files (`.env`, `.json`, `.conf`, and Kubernetes YAMLs) for hardcoded credentials. It combines high-confidence vendor regexes (AWS, GitHub, Slack) with a highly tuned, character-set adjusted **Shannon Entropy filter** to drastically reduce false positives (intelligently ignoring things like Git SHAs or UUIDs).
-* **Terraform Security**: Scans Terraform (`.tf`) for insecure AWS configurations (e.g. public S3 bucket ACLs) and embedded secrets.
+* **Terraform Security**: Uses native HCL parsing (`python-hcl2`) to deeply inspect Terraform (`.tf`) ASTs for insecure AWS configurations (e.g. open ingress ports, unencrypted databases, missing S3 encryption/PABs) and embedded secrets.
 * **SSRF Auditing**: Capable of auditing web targets for Server-Side Request Forgery vulnerabilities.
 
 ### 2. Automated CI/CD Gating & Integration
 * **Headless CLI Gate**: AntiFine is built to run headlessly in CI/CD environments (like GitHub Actions). By running a command like `python -m src.cli.gate --fail-on HIGH`, AntiFine acts as a strict deployment gate, instantly breaking the build if any configuration violates the required severity threshold.
-* **SARIF Export**: It natively translates findings into the **OASIS SARIF v2.1.0** standard, allowing immediate and seamless integration with native GitHub Security Code Scanning alerts.
+* **SARIF Export**: It natively translates findings into the **OASIS SARIF v2.1.0** standard, injecting full compliance framework tags and drop-in remediation blocks into the payload for seamless integration with native GitHub Security Code Scanning alerts.
 * **SOC Dispatching**: It supports webhook integrations to instantly dispatch critical security alerts to a Security Operations Center (SOC) or incident response channel.
 
 ### 3. Compliance Mapping & Remediation
 AntiFine doesn't just throw errors—it contextualizes them.
-* Every finding is automatically mapped against industry-standard frameworks such as the **CIS Benchmarks** and **NIST SP 800-190**.
-* It acts as a knowledge base, attaching direct, actionable **remediation guidance** to every alert so developers know exactly how to fix the issue without needing to become security experts.
+* Every finding is automatically mapped against industry-standard frameworks such as the **CIS Benchmarks**, **NIST SP 800-190**, and **PCI-DSS**.
+* It acts as a knowledge base, attaching direct, actionable **drop-in remediation** code snippets to every alert so developers know exactly how to fix the issue without needing to become security experts.
 
 ### 4. System Architecture
 * **The Engine**: A heavily decoupled Python 3 backend using FastAPI to expose scanning, analytics, and reporting capabilities via a REST API.
-* **The Interface**: A modern React/Vite frontend for visualizing compliance score gauges, historical severity trends, and managing integrations.
+* **The Interface**: A modern React/Vite frontend acting as an **Interactive Remediation Workspace**, featuring on-demand scanning, real-time KPI severity filtering, SARIF exporting, and a dynamic slide-over drawer for actionable code remediation.
 * **The Storage**: A localized SQLite database for fast, private, and persistent audit logging and historical trend analysis.
 
 ---

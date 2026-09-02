@@ -7,6 +7,7 @@ If you need to understand the codebase, the scanner logic (Dockerfile, Kubernete
 1. **Update Architecture Skill**: If you add new scanners, alter the core logic in `iac_audit.py`, change return types, or significantly modify the pipeline, you MUST update `.agents/skills/antifine-architecture/SKILL.md` to reflect these changes so future agents have up-to-date knowledge.
 2. **Commit Behavior**: After successfully testing your changes, auto-commit them. Do NOT use `git add .` - only add the specific files you changed.
 3. **No Unintentional Commits**: NEVER commit configuration files, `.env` files, or local database states unless explicitly authorized.
+4. **Continuous Documentation**: You MUST always update `README.md` and any relevant skills files (like `antifine-architecture/SKILL.md`) after every prompt to ensure documentation stays perfectly in sync with the codebase.
 
 ## Coding Standards
 - Write modular, decoupled code. Scanners must not depend on the reporting engine.
