@@ -12,16 +12,35 @@ def map_finding_to_framework(vulnerability_type: str) -> str:
     Returns:
         The compliance framework identifier, or 'Unmapped' if no match.
     """
-    vulnerability_type_lower = vulnerability_type.lower()
-    
-    if "user root" in vulnerability_type_lower or "root user" in vulnerability_type_lower:
+    v = vulnerability_type.lower()
+
+    # ── Docker / CIS Docker Benchmark ───────────────────────────────────────
+    if "user root" in v or "root user" in v:
         return "CIS Docker Benchmark 4.1"
-        
-    if "ssrf" in vulnerability_type_lower or "injection" in vulnerability_type_lower:
-        return "OWASP Top 10, ISO 27001 Control A.14.2.5"
-        
-    # Add other mappings here as they arise, e.g., missing limits etc.
-    if "privileged: true" in vulnerability_type_lower:
+
+    if "missing user" in v:
+        return "CIS Docker Benchmark 4.1"
+
+    if "missing healthcheck" in v or "healthcheck" in v:
+        return "CIS Docker Benchmark 4.6"
+
+    # ── Kubernetes / CIS Kubernetes Benchmark ────────────────────────────────
+    if "privileged: true" in v or "privileged" in v:
         return "CIS Kubernetes Benchmark 5.2.1"
-        
+
+    if "resource limits" in v or "missing resource" in v:
+        return "CIS Kubernetes Benchmark 5.2.4"
+
+    # ── Terraform / AWS S3 ───────────────────────────────────────────────────
+    if "s3" in v and ("public" in v or "acl" in v):
+        return "CIS AWS Foundations Benchmark 2.1.5"
+
+    # ── Web / SSRF / Injection ───────────────────────────────────────────────
+    if "ssrf" in v or "injection" in v:
+        return "OWASP Top 10, ISO 27001 Control A.14.2.5"
+
+    # ── Exposed ports / plaintext services ──────────────────────────────────
+    if "telnet" in v or "ftp" in v or "plaintext" in v:
+        return "NIST SP 800-53 SC-8"
+
     return "Unmapped"

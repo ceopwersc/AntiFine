@@ -203,26 +203,78 @@ async def run_ssrf_scan(req: SSRFScanRequest, background_tasks: BackgroundTasks)
 
 @app.post("/api/scan/iac")
 async def run_iac_scan(req: IaCScanRequest, background_tasks: BackgroundTasks) -> Dict[str, Any]:
-    """Execute the IaC scanner against a local file or directory."""
+    """Execute the IaC scanner against a local file or directory.
+
+    Resolves relative paths against the project root so that inputs like
+    'test_dockerfile' or './k8s/deployment.yaml' work from any CWD.
+    Persists every finding (with compliance framework tag) to antifine.db
+    and dispatches webhook alerts for HIGH/CRITICAL findings.
+    """
     try:
-        findings = run_iac_audit(req.target_path, persist=False)
+        # ── Resolve path: prefer absolute, fall back to PROJECT_ROOT-relative ──
+        target = Path(req.target_path)
+        if not target.is_absolute():
+            resolved = PROJECT_ROOT / target
+        else:
+            resolved = target
+
+        if not resolved.exists():
+            raise HTTPException(
+                status_code=422,
+                detail=f"Target path not found: '{req.target_path}' "
+                       f"(resolved to '{resolved}'). "
+                       f"Provide an absolute path or a path relative to the project root."
+            )
+
+        # ── Run the scanner (no internal persistence — we handle it here) ──────
+        raw_findings = run_iac_audit(str(resolved), persist=False)
+
+        # ── Enrich each finding with compliance framework tag ─────────────────
+        enriched: list[Dict[str, Any]] = []
         rows = []
-        for vuln_type, severity in findings:
+        for vuln_type, severity in raw_findings:
             framework = map_finding_to_framework(vuln_type)
+            enriched.append({
+                "rule_name": vuln_type,
+                "severity": severity,
+                "compliance_framework": framework,
+                "description": vuln_type,  # human-readable in terminal
+            })
             rows.append((1, vuln_type, severity, "OPEN", framework))
-            
+
+        # ── Persist to database ───────────────────────────────────────────────
         if rows:
-            with sqlite3.connect(DB_PATH) as conn:
-                conn.executemany(
-                    "INSERT INTO scan_results "
-                    "(target_id, vulnerability_type, severity, status, compliance_framework) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    rows,
-                )
-                conn.commit()
+            try:
+                initialize_database()  # ensure DB and tables exist
+                with sqlite3.connect(DB_PATH) as conn:
+                    conn.executemany(
+                        "INSERT INTO scan_results "
+                        "(target_id, vulnerability_type, severity, status, compliance_framework) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        rows,
+                    )
+                    conn.commit()
+            except sqlite3.Error as db_exc:
+                # Log but don't abort — still return findings to the UI
+                print(f"[warn] DB write failed: {db_exc}", file=sys.stderr)
+
             _dispatch_alerts_for_rows(rows, background_tasks)
-                
-        return {"status": "success", "message": f"IaC scan completed for {req.target_path}"}
+
+        findings_count = len(enriched)
+        return {
+            "status": "completed",
+            "target": str(resolved),
+            "findings_count": findings_count,
+            "findings": enriched,
+            "summary": (
+                f"Audit complete: {findings_count} compliance violation{'s' if findings_count != 1 else ''} identified."
+                if findings_count > 0
+                else "Audit complete: no violations detected. Target appears compliant."
+            ),
+        }
+
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
