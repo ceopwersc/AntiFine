@@ -16,3 +16,7 @@
 - Use a descriptive commit message: `git commit -m "Auto-commit: [Specific description]"`
 - Push to the repository: `git push origin main`
 - NEVER commit configuration files, `.env` files, or local database states unless I explicitly authorize it.
+
+## Project History / Recent Updates
+- **Phase 1**: Implemented `src/scanners/secret_scanner.py` with high-confidence vendor regexes (AWS, GitHub, Slack) and charset-adjusted Shannon entropy for FP reduction. Integrated into `iac_audit.py`.
+- **Phase 2 & 3**: Refactored `analyze_kubernetes` in `iac_audit.py` to use structured `PyYAML` parsing for multi-document manifests. Enforced Kubernetes PSS Restricted rules (Host Namespace, Privileged, Read-Only FS, Capabilities, Resource Limits). Updated CLI gate and `run_iac_audit` to handle mixed-type (tuple and dictionary) findings cleanly.
