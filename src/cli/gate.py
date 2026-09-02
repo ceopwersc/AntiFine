@@ -54,7 +54,13 @@ def main():
     failed = False
     
     if findings:
-        for finding_msg, severity in findings:
+        for finding in findings:
+            if isinstance(finding, dict):
+                finding_msg = finding.get("rule_name", "Unknown Rule")
+                severity = finding.get("severity", "LOW")
+            else:
+                finding_msg, severity = finding
+
             sev_upper = severity.upper()
             rank = SEVERITY_RANKS.get(sev_upper, 0)
             
@@ -68,7 +74,8 @@ def main():
     if args.min_score is not None:
         # Calculate a naive score: Start at 100, deduct based on severity.
         score = 100
-        for _, sev in findings:
+        for finding in findings:
+            sev = finding.get("severity", "LOW") if isinstance(finding, dict) else finding[1]
             sev_upper = sev.upper()
             if sev_upper == "CRITICAL":
                 score -= 20

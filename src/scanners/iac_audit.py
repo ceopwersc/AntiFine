@@ -15,6 +15,7 @@ import math
 import re
 import sqlite3
 import sys
+import yaml
 from pathlib import Path
 
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
@@ -249,156 +250,92 @@ def analyze_dockerfile(content: str, filename: str) -> list[tuple[str, str]]:
 
 # ── Kubernetes YAML analysis ─────────────────────────────────────────────────
 
-def _fallback_kubernetes_scan(content: str, filename: str) -> list[tuple[str, str]]:
-    findings: list[tuple[str, str]] = []
+def analyze_kubernetes(content: str, filename: str) -> list[dict]:
+    """Scan Kubernetes YAML manifests against Pod Security Standards (PSS Restricted) and CIS Benchmarks."""
+    findings = []
 
-    if "privileged: true" in content:
-        findings.append(
-            (f"Insecure Configuration (privileged: true) in {filename}", "CRITICAL")
-        )
-
-    if "resources:" not in content or "limits:" not in content:
-        findings.append(
-            (f"Insecure Configuration (Missing resource limits) in {filename}", "MEDIUM")
-        )
-
-    # ── Entropy scan on YAML string values ───────────────────────────────
-    # Matches "  key: value" lines; skips comments and block/flow indicators.
-    _yaml_kv = re.compile(r'^\s*([\w.-]+):\s+"?([^"#{}\[\]|>]+)"?\s*$')
-    for raw_line in content.splitlines():
-        m = _yaml_kv.match(raw_line)
-        if not m:
-            continue
-        key, val = m.group(1), m.group(2).strip()
-        ef = scan_value_for_secrets(val, key, filename)
-        if ef:
-            findings.append(ef)
-
-    return findings
-
-
-def _evaluate_kubernetes_podspec(pod_spec: dict, filename: str) -> list[tuple[str, str]]:
-    findings: list[tuple[str, str]] = []
-    
-    # 1. Host Namespace Access
-    if pod_spec.get('hostPID') is True or pod_spec.get('hostIPC') is True or pod_spec.get('hostNetwork') is True:
-        findings.append((f"Kubernetes PSS: Host namespace access enabled in {filename}", "CRITICAL"))
-
-    containers = pod_spec.get('containers', [])
-    init_containers = pod_spec.get('initContainers', [])
-    if not isinstance(containers, list): containers = []
-    if not isinstance(init_containers, list): init_containers = []
-    all_containers = containers + init_containers
-
-    for c in all_containers:
-        if not isinstance(c, dict):
-            continue
-            
-        name = c.get('name', 'unknown')
-        
-        # 2. Privileged Execution
-        sec_ctx = c.get('securityContext', {})
-        if isinstance(sec_ctx, dict):
-            if sec_ctx.get('privileged') is True:
-                findings.append((f"Kubernetes PSS: Privileged execution enabled (privileged: true) in {filename} [container: {name}]", "CRITICAL"))
-                
-            # 3. Read-Only Root Filesystem
-            if not sec_ctx.get('readOnlyRootFilesystem', False):
-                findings.append((f"Kubernetes PSS: Read-only root filesystem not enforced in {filename} [container: {name}]", "MEDIUM"))
-                
-            # 4. Linux Capabilities
-            capabilities = sec_ctx.get('capabilities', {})
-            if isinstance(capabilities, dict):
-                drop = capabilities.get('drop', [])
-                if not isinstance(drop, list): drop = []
-                drop = [str(d).upper() for d in drop]
-                
-                if "ALL" not in drop:
-                    findings.append((f"Kubernetes PSS: Linux capabilities do not drop ALL in {filename} [container: {name}]", "HIGH"))
-                    
-                add = capabilities.get('add', [])
-                if not isinstance(add, list): add = []
-                add = [str(a).upper() for a in add]
-                
-                if "CAP_SYS_ADMIN" in add or "CAP_NET_ADMIN" in add:
-                    findings.append((f"Kubernetes PSS: Dangerous Linux capabilities added in {filename} [container: {name}]", "HIGH"))
-        else:
-            # If no securityContext exists, it's missing readOnlyRootFilesystem and drop ALL
-            findings.append((f"Kubernetes PSS: Read-only root filesystem not enforced in {filename} [container: {name}]", "MEDIUM"))
-            findings.append((f"Kubernetes PSS: Linux capabilities do not drop ALL in {filename} [container: {name}]", "HIGH"))
-
-        # 5. Resource Limits
-        resources = c.get('resources', {})
-        if isinstance(resources, dict):
-            limits = resources.get('limits', {})
-            if not isinstance(limits, dict) or 'cpu' not in limits or 'memory' not in limits:
-                findings.append((f"Kubernetes PSS: Missing resource limits in {filename} [container: {name}]", "MEDIUM"))
-        else:
-            findings.append((f"Kubernetes PSS: Missing resource limits in {filename} [container: {name}]", "MEDIUM"))
-            
-    return findings
-
-
-def analyze_kubernetes(content: str, filename: str) -> list[tuple[str, str]]:
-    """Scan a Kubernetes YAML file for security misconfigurations."""
     try:
-        import yaml
-    except ImportError:
-        return _fallback_kubernetes_scan(content, filename)
+        documents = list(yaml.safe_load_all(content))
+    except Exception:
+        documents = []
 
-    findings: list[tuple[str, str]] = []
-    
-    try:
-        # Load all documents
-        docs = list(yaml.safe_load_all(content))
-    except yaml.YAMLError:
-        return _fallback_kubernetes_scan(content, filename)
-        
-    for doc in docs:
+    for doc in documents:
         if not isinstance(doc, dict):
             continue
-            
-        kind = doc.get('kind')
-        if not kind:
+
+        # Extract pod spec from standalone Pods or workload controllers (Deployment, DaemonSet, etc.)
+        spec = None
+        if doc.get("kind") == "Pod":
+            spec = doc.get("spec", {})
+        elif "spec" in doc and isinstance(doc["spec"], dict):
+            template = doc["spec"].get("template", {})
+            if isinstance(template, dict):
+                spec = template.get("spec", {})
+
+        if not spec or not isinstance(spec, dict):
             continue
-            
-        # Extract PodSpec depending on Kind
-        pod_spec = None
-        if kind == 'Pod':
-            pod_spec = doc.get('spec')
-        elif kind in ('Deployment', 'StatefulSet', 'DaemonSet', 'Job', 'ReplicaSet'):
-            spec = doc.get('spec', {})
-            if isinstance(spec, dict):
-                template = spec.get('template', {})
-                if isinstance(template, dict):
-                    pod_spec = template.get('spec')
-        elif kind == 'CronJob':
-            spec = doc.get('spec', {})
-            if isinstance(spec, dict):
-                jobTemplate = spec.get('jobTemplate', {})
-                if isinstance(jobTemplate, dict):
-                    template_spec = jobTemplate.get('spec', {})
-                    if isinstance(template_spec, dict):
-                        template = template_spec.get('template', {})
-                        if isinstance(template, dict):
-                            pod_spec = template.get('spec')
-                            
-        if isinstance(pod_spec, dict):
-            findings.extend(_evaluate_kubernetes_podspec(pod_spec, filename))
 
-    # Also run the generic string secrets entropy check on the raw YAML
-    _yaml_kv = re.compile(r'^\s*([\w.-]+):\s+"?([^"#{}\[\]|>]+)"?\s*$')
-    for raw_line in content.splitlines():
-        m = _yaml_kv.match(raw_line)
-        if m:
-            key, val = m.group(1), m.group(2).strip()
-            ef = scan_value_for_secrets(val, key, filename)
-            if ef:
-                findings.append(ef)
+        # 1. Host Namespace Inspection (CRITICAL)
+        if spec.get("hostPID") is True or spec.get("hostIPC") is True or spec.get("hostNetwork") is True:
+            namespaces = [k for k in ["hostPID", "hostIPC", "hostNetwork"] if spec.get(k) is True]
+            findings.append({
+                "rule_name": f"Host Namespace Exposure ({', '.join(namespaces)}) in {filename}",
+                "severity": "CRITICAL",
+                "frameworks": ["CIS Kubernetes 5.2.2", "NIST SP 800-190 Section 3.3.1"],
+                "remediation": "Remove hostPID, hostIPC, and hostNetwork flags from pod spec."
+            })
 
-    # Deduplicate findings since multiple resources in one file might generate identical strings
-    # but we usually keep them all. Wait, lists of tuples can be deduplicated easily.
-    # However, keeping them all shows exactly how many violations there are.
+        containers = spec.get("containers", [])
+        if not isinstance(containers, list):
+            containers = []
+
+        for container in containers:
+            if not isinstance(container, dict):
+                continue
+
+            c_name = container.get("name", "unnamed")
+            sec_ctx = container.get("securityContext") or {}
+
+            # 2. Privileged Execution (CRITICAL)
+            if sec_ctx.get("privileged") is True:
+                findings.append({
+                    "rule_name": f"Privileged Container ({c_name}) in {filename}",
+                    "severity": "CRITICAL",
+                    "frameworks": ["CIS Kubernetes 5.2.1", "PCI-DSS 4.0 Req 2.2.4"],
+                    "remediation": "securityContext:\n  privileged: false\n  allowPrivilegeEscalation: false"
+                })
+
+            # 3. Read-Only Root Filesystem (MEDIUM)
+            if sec_ctx.get("readOnlyRootFilesystem") is not True:
+                findings.append({
+                    "rule_name": f"Writable Root Filesystem ({c_name}) in {filename}",
+                    "severity": "MEDIUM",
+                    "frameworks": ["CIS Kubernetes 5.2.6", "NIST SP 800-190 Section 3.3.4"],
+                    "remediation": "securityContext:\n  readOnlyRootFilesystem: true"
+                })
+
+            # 4. Capabilities Drop ALL (HIGH)
+            caps = sec_ctx.get("capabilities") or {}
+            dropped = caps.get("drop") or []
+            if "ALL" not in [d.upper() for d in dropped if isinstance(d, str)]:
+                findings.append({
+                    "rule_name": f"Insecure Capabilities (Missing drop ALL for {c_name}) in {filename}",
+                    "severity": "HIGH",
+                    "frameworks": ["CIS Kubernetes 5.2.7", "PSS Restricted"],
+                    "remediation": "securityContext:\n  capabilities:\n    drop:\n      - ALL"
+                })
+
+            # 5. Resource Limits (MEDIUM)
+            resources = container.get("resources") or {}
+            limits = resources.get("limits") or {}
+            if not limits.get("cpu") or not limits.get("memory"):
+                findings.append({
+                    "rule_name": f"Missing Resource Limits ({c_name}) in {filename}",
+                    "severity": "MEDIUM",
+                    "frameworks": ["NIST SP 800-190 Section 3.3.4", "CIS Kubernetes 5.2.8"],
+                    "remediation": "resources:\n  limits:\n    cpu: '500m'\n    memory: '512Mi'"
+                })
+
     return findings
 
 
@@ -457,8 +394,9 @@ def analyze_generic_secrets(content: str, filename: str) -> list[tuple[str, str]
 
 
 # ── File dispatcher ──────────────────────────────────────────────────────────
+from typing import Union
 
-def scan_file(filepath: Path) -> list[tuple[str, str]]:
+def scan_file(filepath: Path) -> list[Union[tuple[str, str], dict]]:
     """Scan a single file based on its name/extension."""
     try:
         content = filepath.read_text(encoding="utf-8")
@@ -491,18 +429,16 @@ def run_iac_audit(
     db_path: Path = DB_PATH,
     target_id: int = 1,
     persist: bool = True,
-) -> list[tuple[str, str]]:
+) -> list[Union[tuple[str, str], dict]]:
     """Run the IaC audit against a file or directory.
 
-    Returns a list of (vulnerability_type, severity) tuples.
-    This signature is preserved for backwards compatibility with existing callers.
-    The server-side handler uses persist=False and enriches findings itself.
+    Returns a list of mixed findings (tuple[str, str] or dict).
     """
     path = Path(target_path)
     if not path.exists():
         raise IaCScannerError(f"Target path does not exist: {target_path}")
 
-    all_findings: list[tuple[str, str]] = []
+    all_findings: list[Union[tuple[str, str], dict]] = []
 
     if path.is_file():
         all_findings.extend(scan_file(path))
@@ -516,10 +452,14 @@ def run_iac_audit(
                 all_findings.extend(scan_file(filepath))
 
     if persist and all_findings:
-        rows = [
-            (target_id, vuln_type, severity, "OPEN")
-            for vuln_type, severity in all_findings
-        ]
+        rows = []
+        for finding in all_findings:
+            if isinstance(finding, dict):
+                rows.append((target_id, finding["rule_name"], finding["severity"], "OPEN"))
+            else:
+                vuln_type, severity = finding
+                rows.append((target_id, vuln_type, severity, "OPEN"))
+
         try:
             initialize_database(db_path)
             with sqlite3.connect(db_path) as connection:
