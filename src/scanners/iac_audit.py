@@ -11,6 +11,7 @@ use run_iac_audit_enriched() and post-process through compliance_mapper.
 
 from __future__ import annotations
 
+import math
 import re
 import sqlite3
 import sys
@@ -26,11 +27,66 @@ class IaCScannerError(RuntimeError):
     """Raised when the IaC audit fails."""
 
 
+# ── Shannon Entropy utilities ────────────────────────────────────────────
+
+ENTROPY_MIN_LENGTH: int = 16   # minimum token length to consider
+ENTROPY_THRESHOLD: float = 3.8  # bits; tuned to catch base64/hex with low FP rate
+
+
+def calculate_entropy(data: str) -> float:
+    """Compute Shannon entropy of *data* in bits per character.
+
+    Formula: H(X) = -Σ P(xᵢ) · log₂ P(xᵢ)
+
+    Returns 0.0 for empty or single-character strings.
+    """
+    if len(data) < 2:
+        return 0.0
+    freq: dict[str, int] = {}
+    for ch in data:
+        freq[ch] = freq.get(ch, 0) + 1
+    n = len(data)
+    return -sum((count / n) * math.log2(count / n) for count in freq.values())
+
+
+def _scan_value_for_entropy(
+    value: str,
+    key_name: str,
+    filename: str,
+) -> tuple[str, str] | None:
+    """Return a finding tuple if *value* looks like a high-entropy secret.
+
+    Two-stage check:
+    1. Keyword match on *key_name* (fast, low-cost).
+    2. Entropy gate on *value* for obfuscated variable names.
+
+    Only tokens whose stripped length is >= ENTROPY_MIN_LENGTH are considered
+    for the entropy path, which keeps false-positive rates low on short values
+    such as UUIDs or version strings.
+    """
+    # Strip surrounding quotes for evaluation
+    stripped = value.strip('"\' \t')
+    if not stripped:
+        return None
+
+    h = calculate_entropy(stripped)
+
+    if len(stripped) >= ENTROPY_MIN_LENGTH and h >= ENTROPY_THRESHOLD:
+        # Even if the key name is innocuous, the value is suspiciously high-entropy
+        return (
+            f"High Entropy Credential Exposure (Shannon H >= {ENTROPY_THRESHOLD}) "
+            f"in {filename} [{key_name}=… H={h:.2f}]",
+            "HIGH",
+        )
+    return None
+
+
 # ── Dockerfile analysis ──────────────────────────────────────────────────────
 
-# Patterns for secret-like ENV key names
+# Patterns for secret-like ENV key names (both `ENV KEY value` and `ENV KEY=value` forms)
 _SECRET_ENV_PATTERN = re.compile(
-    r"^ENV\s+(\w*(PASSWORD|SECRET|TOKEN|KEY|APIKEY|API_KEY|CREDENTIAL|AUTH)\w*)\s+\S+",
+    r"^ENV\s+(\w*(PASSWORD|SECRET|TOKEN|KEY|APIKEY|API_KEY|CREDENTIAL|AUTH)\w*)"
+    r"(?:\s+\S+|=\S+)",
     re.IGNORECASE,
 )
 
@@ -49,21 +105,24 @@ def analyze_dockerfile(content: str, filename: str) -> list[tuple[str, str]]:
     - Missing HEALTHCHECK                            (CIS Docker 4.6)
     - Hardcoded secrets in ENV instructions          (CIS Docker 4.7)
     - Unpinned or ':latest'-tagged base image        (CIS Docker 4.3)
+    - High-entropy values in ENV/ARG instructions    (Shannon H ≥ 3.8)
     """
     findings: list[tuple[str, str]] = []
     lines = content.splitlines()
 
     has_user = False
     has_healthcheck = False
+    # Track already-flagged lines so keyword + entropy don't double-report
+    keyword_flagged_lines: set[int] = set()
 
-    for raw_line in lines:
+    for idx, raw_line in enumerate(lines):
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
 
         upper = line.upper()
 
-        # ── USER directive ────────────────────────────────────────────────
+        # ── USER directive ───────────────────────────────────────────────
         if upper.startswith("USER "):
             has_user = True
             user = line.split(" ", 1)[1].strip().lower()
@@ -76,14 +135,35 @@ def analyze_dockerfile(content: str, filename: str) -> list[tuple[str, str]]:
         elif upper.startswith("HEALTHCHECK "):
             has_healthcheck = True
 
-        # ── ENV hardcoded secret detection ────────────────────────────────
-        elif upper.startswith("ENV "):
+        # ── ENV / ARG secret detection (keyword name + entropy) ───────────────
+        elif upper.startswith("ENV ") or upper.startswith("ARG "):
+            # Parse key=value or "key value" forms
+            rest = line.split(" ", 1)[1] if " " in line else ""
+            # Normalise: handle both `ENV KEY value` and `ENV KEY=value`
+            if "=" in rest:
+                key, _, val = rest.partition("=")
+            else:
+                parts = rest.split(None, 1)
+                key = parts[0] if parts else ""
+                val = parts[1] if len(parts) > 1 else ""
+
+            key = key.strip()
+            val = val.strip()
+
+            # Stage 1 — keyword name match (CRITICAL)
             if _SECRET_ENV_PATTERN.match(line):
                 findings.append(
                     (f"Hardcoded Secret in ENV Instruction in {filename}", "CRITICAL")
                 )
+                keyword_flagged_lines.add(idx)
 
-        # ── FROM unpinned image detection ─────────────────────────────────
+            # Stage 2 — high-entropy value check (HIGH) — even for innocuous key names
+            if idx not in keyword_flagged_lines and val:
+                entropy_finding = _scan_value_for_entropy(val, key, filename)
+                if entropy_finding:
+                    findings.append(entropy_finding)
+
+        # ── FROM unpinned image detection ──────────────────────────────────
         elif upper.startswith("FROM "):
             m = _UNPINNED_FROM_PATTERN.match(line)
             if m:
@@ -96,7 +176,7 @@ def analyze_dockerfile(content: str, filename: str) -> list[tuple[str, str]]:
                             (f"Unpinned Image Tag (latest or missing) in {filename}", "MEDIUM")
                         )
 
-    # ── Post-line checks ──────────────────────────────────────────────────
+    # ── Post-line checks ─────────────────────────────────────────────
     if not has_user:
         findings.append(
             (f"Insecure Configuration (Missing USER) in {filename}", "MEDIUM")
@@ -126,6 +206,18 @@ def analyze_kubernetes(content: str, filename: str) -> list[tuple[str, str]]:
             (f"Insecure Configuration (Missing resource limits) in {filename}", "MEDIUM")
         )
 
+    # ── Entropy scan on YAML string values ───────────────────────────────
+    # Matches "  key: value" lines; skips comments and block/flow indicators.
+    _yaml_kv = re.compile(r'^\s*([\w.-]+):\s+"?([^"#{}\[\]|>]+)"?\s*$')
+    for raw_line in content.splitlines():
+        m = _yaml_kv.match(raw_line)
+        if not m:
+            continue
+        key, val = m.group(1), m.group(2).strip()
+        ef = _scan_value_for_entropy(val, key, filename)
+        if ef:
+            findings.append(ef)
+
     return findings
 
 
@@ -135,14 +227,26 @@ def analyze_terraform(content: str, filename: str) -> list[tuple[str, str]]:
     """Scan a Terraform file for security misconfigurations."""
     findings: list[tuple[str, str]] = []
 
+    # Match HCL assignment: key = "value" (unquoted key, quoted value)
+    _tf_kv = re.compile(r'^\s*([\w_]+)\s*=\s*"([^"]+)"')
+
     for raw_line in content.splitlines():
         line = raw_line.strip()
         if line.startswith("#") or line.startswith("//"):
             continue
+
         if re.search(r'acl\s*=\s*"(public-read|public-read-write)"', line):
             findings.append(
                 (f"Insecure S3 Bucket ACL (Public) in {filename}", "HIGH")
             )
+
+        # Entropy scan on string values
+        m = _tf_kv.match(raw_line)
+        if m:
+            key, val = m.group(1), m.group(2)
+            ef = _scan_value_for_entropy(val, key, filename)
+            if ef:
+                findings.append(ef)
 
     return findings
 

@@ -268,6 +268,42 @@ _RULES: list[tuple] = [
             ),
         ),
     ),
+
+    # ── High-entropy credential exposure (Shannon H >= 3.8) ──────────────
+    (
+        lambda v: "high entropy credential" in v or "shannon h" in v,
+        FindingMetadata(
+            primary_framework="CIS Docker Benchmark 4.7",
+            frameworks=[
+                "CIS Docker Benchmark 4.7",
+                "CWE-312 (Cleartext Storage of Sensitive Information)",
+                "ISO 27001 A.8.24",
+                "NIST SP 800-190 §3.3.1",
+            ],
+            description=(
+                "A string value with high Shannon entropy (H \u2265 3.8 bits/char) was found "
+                "in a configuration instruction. High entropy is a strong indicator of an "
+                "embedded secret, token, or base64-encoded credential, even when the "
+                "variable name appears innocuous."
+            ),
+            remediation=(
+                "# Remove the high-entropy value from the configuration file.\n"
+                "# Use a secrets manager to inject secrets at runtime:\n\n"
+                "# Docker BuildKit (build-time, never stored in layer):\n"
+                "# syntax=docker/dockerfile:1\n"
+                "RUN --mount=type=secret,id=my_secret,target=/run/secrets/my_secret \\\n"
+                "    cat /run/secrets/my_secret\n\n"
+                "# Kubernetes: use a Secret object and reference via envFrom\n"
+                "# envFrom:\n"
+                "#   - secretRef:\n"
+                "#       name: my-app-secret\n\n"
+                "# Terraform: use AWS Secrets Manager or Vault provider\n"
+                'data "aws_secretsmanager_secret_version" "my_secret" {\n'
+                '  secret_id = "my-app/secret"\n'
+                "}"
+            ),
+        ),
+    ),
 ]
 
 
