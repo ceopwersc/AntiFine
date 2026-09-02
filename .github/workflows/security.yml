@@ -29,17 +29,4 @@ jobs:
 
       - name: Run AntiFine Pipeline
         run: |
-          # 1. Initialize database
-          python src/main.py --init
-          
-          # 2. Run target scans (Add your specific audit commands here later)
-          # python src/main.py --audit-local
-          
-          # 3. Export to SARIF
-          python src/main.py --export-sarif results.sarif
-
-      - name: Upload SARIF file
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: results.sarif
-          category: antifine
+          python -m src.cli.gate --file Dockerfile.multistage_compliant --fail-on HIGH
