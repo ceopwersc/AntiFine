@@ -1,0 +1,9 @@
+FROM golang:1.22-alpine AS builder
+USER root
+RUN apk add --no-cache build-base
+
+FROM alpine:3.19
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+USER appuser
+HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://localhost:8080/health || exit 1
+CMD ["./app"]
