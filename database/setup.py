@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS scan_results (
     severity TEXT,
     status TEXT,
     compliance_framework TEXT,
+    target_path TEXT,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 )
 """
@@ -69,6 +70,12 @@ def initialize_database(db_path: Path = DB_PATH) -> Path:
                 cursor.execute("ALTER TABLE scan_results ADD COLUMN compliance_framework TEXT")
             except sqlite3.OperationalError:
                 # Column might already exist, which is fine
+                pass
+
+            # Add target_path column to existing databases
+            try:
+                cursor.execute("ALTER TABLE scan_results ADD COLUMN target_path TEXT")
+            except sqlite3.OperationalError:
                 pass
                 
             connection.commit()

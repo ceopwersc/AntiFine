@@ -16,16 +16,21 @@ export const runScan = async (target: string, type: string) => {
 };
 
 export const generateReport = async (format: string) => {
-  // return (await apiClient.post('/report', { format })).data;
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      resolve({
-        status: 'success',
-        message: `Report generated in ${format} format`,
-        url: `/downloads/report.${format === 'markdown' ? 'md' : 'sarif'}`
-      });
-    }, 800);
-  });
+  if (format === 'sarif') {
+    const resp = await apiClient.get('/scan/iac/export/sarif');
+    const blob = new Blob([JSON.stringify(resp.data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    return { status: 'success', message: 'SARIF report generated', downloadUrl: url };
+  }
+  const resp = await apiClient.post('/report/generate');
+  const data = resp.data;
+  return {
+    status: data.status,
+    message: data.results?.markdown?.status === 'success'
+      ? `Markdown report written to ${data.results.markdown.file} (${data.results.markdown.findings} findings)`
+      : data.results?.markdown?.message || 'Report generated',
+    results: data.results,
+  };
 };
 
 export const getWebhooks = async () => {

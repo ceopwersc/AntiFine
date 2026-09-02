@@ -1,17 +1,12 @@
 """Infrastructure-as-Code (IaC) configuration auditor.
 
-Parses Dockerfiles, Kubernetes YAML manifests, and Terraform files to detect
-common configuration vulnerabilities.  Each finding is returned as a plain
-(vulnerability_type, severity) tuple so that run_iac_audit() remains
-backwards-compatible with existing callers.
-
-New callers that want enriched dicts (frameworks, remediation, etc.) should
-use run_iac_audit_enriched() and post-process through compliance_mapper.
+Parses Dockerfiles, Kubernetes YAML manifests, Terraform files, and generic
+configuration files to detect security misconfigurations.  Every scanner
+returns a list[Finding] using the normalized Finding dataclass.
 """
 
 from __future__ import annotations
 
-import math
 import re
 import sqlite3
 import sys
@@ -23,6 +18,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from database.setup import DB_PATH, initialize_database  # noqa: E402
+from src.models.finding import Finding  # noqa: E402
 from src.scanners.secret_scanner import scan_value_for_secrets  # noqa: E402
 
 
@@ -30,6 +26,12 @@ class IaCScannerError(RuntimeError):
     """Raised when the IaC audit fails."""
 
 
+# ── Directories to skip during recursive scans ──────────────────────────────
+
+_EXCLUDED_DIRS = {
+    ".git", ".venv", "venv", "node_modules", "__pycache__",
+    ".tox", "dist", "build", ".eggs", ".mypy_cache", ".pytest_cache",
+}
 
 # ── Dockerfile analysis ──────────────────────────────────────────────────────
 
@@ -120,29 +122,9 @@ def _parse_dockerfile_stages(lines: list[str]) -> list[DockerfileStage]:
     return stages
 
 
-def analyze_dockerfile(content: str, filename: str) -> list[tuple[str, str]]:
-    """Scan a Dockerfile for security misconfigurations with multi-stage awareness.
-
-    Stage-specific enforcement rules:
-    +-----------------------------+-------------------+---------------------+
-    | Check                       | Intermediate stage| Final (runtime) stage|
-    +-----------------------------+-------------------+---------------------+
-    | USER root (explicit)        | INFORMATIONAL     | HIGH                |
-    | Missing USER directive      | (not enforced)    | MEDIUM              |
-    | Missing HEALTHCHECK         | (not enforced)    | LOW                 |
-    | Hardcoded secret (keyword)  | CRITICAL          | CRITICAL            |
-    | High-entropy value (entropy)| HIGH              | HIGH                |
-    | Unpinned image tag          | MEDIUM            | MEDIUM              |
-    +-----------------------------+-------------------+---------------------+
-
-    Rationale for INFORMATIONAL on intermediate stages:
-    - Build stages (compilers, package managers) legitimately need root access
-      to install system packages, modify /etc, and set up toolchains.
-    - The production/runtime image (final stage) must never run as root.
-    - Secrets and entropy checks apply to ALL stages — a leaked credential
-      baked into any layer is still a security exposure.
-    """
-    findings: list[tuple[str, str]] = []
+def analyze_dockerfile(content: str, filename: str) -> list[Finding]:
+    """Scan a Dockerfile for security misconfigurations with multi-stage awareness."""
+    findings: list[Finding] = []
     lines = content.splitlines()
     stages = _parse_dockerfile_stages(lines)
 
@@ -162,18 +144,24 @@ def analyze_dockerfile(content: str, filename: str) -> list[tuple[str, str]]:
                 user = line.split(" ", 1)[1].strip().lower()
                 if user in ("root", "0"):
                     if stage.is_final:
-                        findings.append((
-                            f"Insecure Configuration (USER root) in {filename}",
-                            "HIGH",
+                        findings.append(Finding(
+                            rule_name=f"Insecure Configuration (USER root) in {filename}",
+                            severity="HIGH",
+                            filename=filename,
+                            frameworks=["CIS Docker Benchmark 4.1", "NIST SP 800-190 §3.3.1"],
+                            remediation="RUN groupadd -r appuser && useradd -r -g appuser appuser\nUSER appuser",
                         ))
                     else:
-                        # Root in a build/toolchain stage is common practice;
-                        # downgrade to INFORMATIONAL so it's visible but not noisy.
-                        findings.append((
-                            f"Informational: USER root in intermediate build stage "
-                            f"({stage_label}) in {filename} "
-                            f"-- acceptable for toolchain/package-installation stages",
-                            "INFORMATIONAL",
+                        findings.append(Finding(
+                            rule_name=(
+                                f"Informational: USER root in intermediate build stage "
+                                f"({stage_label}) in {filename} "
+                                f"-- acceptable for toolchain/package-installation stages"
+                            ),
+                            severity="INFORMATIONAL",
+                            filename=filename,
+                            frameworks=["CIS Docker Benchmark 4.1 (Informational)"],
+                            remediation="No action required for intermediate build stages.",
                         ))
 
             # ── HEALTHCHECK directive ─────────────────────────────────────
@@ -199,9 +187,12 @@ def analyze_dockerfile(content: str, filename: str) -> list[tuple[str, str]]:
                     findings.append(ef)
                 # Stage 2 -- Fallback keyword name match (CRITICAL, any stage)
                 elif _SECRET_ENV_PATTERN.match(line):
-                    findings.append((
-                        f"Hardcoded Secret in ENV Instruction in {filename}",
-                        "CRITICAL",
+                    findings.append(Finding(
+                        rule_name=f"Hardcoded Secret in ENV Instruction in {filename}",
+                        severity="CRITICAL",
+                        filename=filename,
+                        frameworks=["CIS Docker Benchmark 4.7", "CWE-798"],
+                        remediation="Remove the ENV secret and use runtime secret injection.",
                     ))
 
             # ── FROM unpinned image (applies to every stage) ──────────────
@@ -216,33 +207,46 @@ def analyze_dockerfile(content: str, filename: str) -> list[tuple[str, str]]:
                                 " [final stage]" if stage.is_final
                                 else f" [{stage_label}]"
                             )
-                            findings.append((
-                                f"Unpinned Image Tag (latest or missing) in "
-                                f"{filename}{stage_ctx}",
-                                "MEDIUM",
+                            findings.append(Finding(
+                                rule_name=(
+                                    f"Unpinned Image Tag (latest or missing) in "
+                                    f"{filename}{stage_ctx}"
+                                ),
+                                severity="MEDIUM",
+                                filename=filename,
+                                frameworks=["CIS Docker Benchmark 4.3", "NIST SP 800-190 §3.3.2"],
+                                remediation="Pin to an exact digest or specific minor version.",
                             ))
 
         # ── Post-stage checks ─────────────────────────────────────────────
         if stage.is_final:
-            # Strict enforcement: the runtime image must specify a non-root user
             if not has_user:
-                findings.append((
-                    f"Insecure Configuration (Missing USER) in {filename}",
-                    "MEDIUM",
+                findings.append(Finding(
+                    rule_name=f"Insecure Configuration (Missing USER) in {filename}",
+                    severity="MEDIUM",
+                    filename=filename,
+                    frameworks=["CIS Docker Benchmark 4.1", "NIST SP 800-190 §3.3.1"],
+                    remediation="RUN groupadd -r appuser && useradd -r -g appuser appuser\nUSER appuser",
                 ))
-            # Health checks only matter for the service that will run in production
             if not has_healthcheck:
-                findings.append((
-                    f"Insecure Configuration (Missing HEALTHCHECK) in {filename}",
-                    "LOW",
+                findings.append(Finding(
+                    rule_name=f"Insecure Configuration (Missing HEALTHCHECK) in {filename}",
+                    severity="LOW",
+                    filename=filename,
+                    frameworks=["CIS Docker Benchmark 4.6", "NIST SP 800-190 §3.3.4"],
+                    remediation="HEALTHCHECK --interval=30s --timeout=3s CMD curl -f http://localhost:8000/health || exit 1",
                 ))
         elif multi_stage and not has_user:
-            # Informational only: intermediate stages default to root, which is fine
-            findings.append((
-                f"Informational: No USER directive in intermediate build stage "
-                f"({stage_label}) in {filename} "
-                f"-- defaults to root, acceptable for build/compilation stages",
-                "INFORMATIONAL",
+            findings.append(Finding(
+                rule_name=(
+                    f"Informational: No USER directive in intermediate build stage "
+                    f"({stage_label}) in {filename} "
+                    f"-- defaults to root, acceptable for build/compilation stages"
+                ),
+                severity="INFORMATIONAL",
+                filename=filename,
+                frameworks=["CIS Docker Benchmark 4.1 (Informational)"],
+                remediation="No action required for intermediate build stages.",
             ))
 
     return findings
@@ -250,20 +254,52 @@ def analyze_dockerfile(content: str, filename: str) -> list[tuple[str, str]]:
 
 # ── Kubernetes YAML analysis ─────────────────────────────────────────────────
 
-def analyze_kubernetes(content: str, filename: str) -> list[dict]:
+# Dangerous capabilities that should never be added
+_DANGEROUS_CAPS = {"SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE", "NET_RAW", "SYS_MODULE", "DAC_OVERRIDE"}
+
+
+def _walk_yaml_strings(obj: object, filename: str) -> list[Finding]:
+    """Recursively walk a parsed YAML structure and scan string values for secrets."""
+    findings: list[Finding] = []
+    if isinstance(obj, dict):
+        for key, val in obj.items():
+            if isinstance(val, str):
+                ef = scan_value_for_secrets(val, str(key), filename)
+                if ef:
+                    findings.append(ef)
+            else:
+                findings.extend(_walk_yaml_strings(val, filename))
+    elif isinstance(obj, list):
+        for item in obj:
+            findings.extend(_walk_yaml_strings(item, filename))
+    return findings
+
+
+def analyze_kubernetes(content: str, filename: str) -> list[Finding]:
     """Scan Kubernetes YAML manifests against Pod Security Standards (PSS Restricted) and CIS Benchmarks."""
-    findings = []
+    findings: list[Finding] = []
 
     try:
         documents = list(yaml.safe_load_all(content))
-    except Exception:
-        documents = []
+    except yaml.YAMLError as exc:
+        findings.append(Finding(
+            rule_name=f"YAML Parse Error in {filename}",
+            severity="CRITICAL",
+            filename=filename,
+            frameworks=["Internal"],
+            remediation="Fix the YAML syntax before scanning.",
+            description=str(exc),
+        ))
+        return findings
 
     for doc in documents:
         if not isinstance(doc, dict):
             continue
 
-        # Extract pod spec from standalone Pods or workload controllers (Deployment, DaemonSet, etc.)
+        # Scan all string values in the document for embedded secrets
+        findings.extend(_walk_yaml_strings(doc, filename))
+
+        # Extract pod spec from standalone Pods or workload controllers
         spec = None
         if doc.get("kind") == "Pod":
             spec = doc.get("spec", {})
@@ -276,74 +312,123 @@ def analyze_kubernetes(content: str, filename: str) -> list[dict]:
             continue
 
         # 1. Host Namespace Inspection (CRITICAL)
-        if spec.get("hostPID") is True or spec.get("hostIPC") is True or spec.get("hostNetwork") is True:
-            namespaces = [k for k in ["hostPID", "hostIPC", "hostNetwork"] if spec.get(k) is True]
-            findings.append({
-                "rule_name": f"Host Namespace Exposure ({', '.join(namespaces)}) in {filename}",
-                "severity": "CRITICAL",
-                "frameworks": ["CIS Kubernetes 5.2.2", "NIST SP 800-190 Section 3.3.1"],
-                "remediation": "Remove hostPID, hostIPC, and hostNetwork flags from pod spec."
-            })
+        host_flags = [k for k in ["hostPID", "hostIPC", "hostNetwork"] if spec.get(k) is True]
+        if host_flags:
+            findings.append(Finding(
+                rule_name=f"Host Namespace Exposure ({', '.join(host_flags)}) in {filename}",
+                severity="CRITICAL",
+                filename=filename,
+                frameworks=["CIS Kubernetes 5.2.2", "NIST SP 800-190 Section 3.3.1"],
+                remediation="Remove hostPID, hostIPC, and hostNetwork flags from pod spec.",
+            ))
 
-        containers = spec.get("containers", [])
-        if not isinstance(containers, list):
-            containers = []
+        # Collect all container types for PSS checks
+        all_containers: list[dict] = []
+        for container_key in ("containers", "initContainers", "ephemeralContainers"):
+            raw = spec.get(container_key, [])
+            if isinstance(raw, list):
+                all_containers.extend(c for c in raw if isinstance(c, dict))
 
-        for container in containers:
-            if not isinstance(container, dict):
-                continue
-
+        for container in all_containers:
             c_name = container.get("name", "unnamed")
             sec_ctx = container.get("securityContext") or {}
 
             # 2. Privileged Execution (CRITICAL)
             if sec_ctx.get("privileged") is True:
-                findings.append({
-                    "rule_name": f"Privileged Container ({c_name}) in {filename}",
-                    "severity": "CRITICAL",
-                    "frameworks": ["CIS Kubernetes 5.2.1", "PCI-DSS 4.0 Req 2.2.4"],
-                    "remediation": "securityContext:\n  privileged: false\n  allowPrivilegeEscalation: false"
-                })
+                findings.append(Finding(
+                    rule_name=f"Privileged Container ({c_name}) in {filename}",
+                    severity="CRITICAL",
+                    filename=filename,
+                    frameworks=["CIS Kubernetes 5.2.1", "PCI-DSS 4.0 Req 2.2.4"],
+                    remediation="securityContext:\n  privileged: false\n  allowPrivilegeEscalation: false",
+                ))
 
-            # 3. Read-Only Root Filesystem (MEDIUM)
+            # 3. allowPrivilegeEscalation (HIGH)
+            if sec_ctx.get("allowPrivilegeEscalation") is not False:
+                findings.append(Finding(
+                    rule_name=f"Privilege Escalation Allowed ({c_name}) in {filename}",
+                    severity="HIGH",
+                    filename=filename,
+                    frameworks=["CIS Kubernetes 5.2.5", "PSS Restricted"],
+                    remediation="securityContext:\n  allowPrivilegeEscalation: false",
+                ))
+
+            # 4. runAsNonRoot (HIGH)
+            if sec_ctx.get("runAsNonRoot") is not True:
+                findings.append(Finding(
+                    rule_name=f"Container May Run As Root ({c_name}) in {filename}",
+                    severity="HIGH",
+                    filename=filename,
+                    frameworks=["CIS Kubernetes 5.2.6", "PSS Restricted"],
+                    remediation="securityContext:\n  runAsNonRoot: true\n  runAsUser: 1000",
+                ))
+
+            # 5. Read-Only Root Filesystem (MEDIUM)
             if sec_ctx.get("readOnlyRootFilesystem") is not True:
-                findings.append({
-                    "rule_name": f"Writable Root Filesystem ({c_name}) in {filename}",
-                    "severity": "MEDIUM",
-                    "frameworks": ["CIS Kubernetes 5.2.6", "NIST SP 800-190 Section 3.3.4"],
-                    "remediation": "securityContext:\n  readOnlyRootFilesystem: true"
-                })
+                findings.append(Finding(
+                    rule_name=f"Writable Root Filesystem ({c_name}) in {filename}",
+                    severity="MEDIUM",
+                    filename=filename,
+                    frameworks=["CIS Kubernetes 5.2.6", "NIST SP 800-190 Section 3.3.4"],
+                    remediation="securityContext:\n  readOnlyRootFilesystem: true",
+                ))
 
-            # 4. Capabilities Drop ALL (HIGH)
+            # 6. Capabilities Drop ALL (HIGH)
             caps = sec_ctx.get("capabilities") or {}
             dropped = caps.get("drop") or []
             if "ALL" not in [d.upper() for d in dropped if isinstance(d, str)]:
-                findings.append({
-                    "rule_name": f"Insecure Capabilities (Missing drop ALL for {c_name}) in {filename}",
-                    "severity": "HIGH",
-                    "frameworks": ["CIS Kubernetes 5.2.7", "PSS Restricted"],
-                    "remediation": "securityContext:\n  capabilities:\n    drop:\n      - ALL"
-                })
+                findings.append(Finding(
+                    rule_name=f"Insecure Capabilities (Missing drop ALL for {c_name}) in {filename}",
+                    severity="HIGH",
+                    filename=filename,
+                    frameworks=["CIS Kubernetes 5.2.7", "PSS Restricted"],
+                    remediation="securityContext:\n  capabilities:\n    drop:\n      - ALL",
+                ))
 
-            # 5. Resource Limits (MEDIUM)
+            # 7. Dangerous capability additions (HIGH)
+            added = caps.get("add") or []
+            dangerous_added = [c.upper() for c in added if isinstance(c, str) and c.upper() in _DANGEROUS_CAPS]
+            if dangerous_added:
+                findings.append(Finding(
+                    rule_name=f"Dangerous Capabilities Added ({', '.join(dangerous_added)} for {c_name}) in {filename}",
+                    severity="HIGH",
+                    filename=filename,
+                    frameworks=["CIS Kubernetes 5.2.7", "PSS Restricted"],
+                    remediation="Remove dangerous capabilities from securityContext.capabilities.add.",
+                ))
+
+            # 8. Seccomp Profile (MEDIUM)
+            seccomp = sec_ctx.get("seccompProfile") or {}
+            seccomp_type = seccomp.get("type", "")
+            if seccomp_type not in ("RuntimeDefault", "Localhost"):
+                findings.append(Finding(
+                    rule_name=f"Missing Seccomp Profile ({c_name}) in {filename}",
+                    severity="MEDIUM",
+                    filename=filename,
+                    frameworks=["PSS Restricted", "CIS Kubernetes 5.7.2"],
+                    remediation="securityContext:\n  seccompProfile:\n    type: RuntimeDefault",
+                ))
+
+            # 9. Resource Limits (MEDIUM)
             resources = container.get("resources") or {}
             limits = resources.get("limits") or {}
             if not limits.get("cpu") or not limits.get("memory"):
-                findings.append({
-                    "rule_name": f"Missing Resource Limits ({c_name}) in {filename}",
-                    "severity": "MEDIUM",
-                    "frameworks": ["NIST SP 800-190 Section 3.3.4", "CIS Kubernetes 5.2.8"],
-                    "remediation": "resources:\n  limits:\n    cpu: '500m'\n    memory: '512Mi'"
-                })
+                findings.append(Finding(
+                    rule_name=f"Missing Resource Limits ({c_name}) in {filename}",
+                    severity="MEDIUM",
+                    filename=filename,
+                    frameworks=["NIST SP 800-190 Section 3.3.4", "CIS Kubernetes 5.2.8"],
+                    remediation="resources:\n  limits:\n    cpu: '500m'\n    memory: '512Mi'",
+                ))
 
     return findings
 
 
 # ── Terraform analysis ───────────────────────────────────────────────────────
 
-def analyze_terraform(content: str, filename: str) -> list[tuple[str, str]]:
+def analyze_terraform(content: str, filename: str) -> list[Finding]:
     """Scan a Terraform file for security misconfigurations."""
-    findings: list[tuple[str, str]] = []
+    findings: list[Finding] = []
 
     # Match HCL assignment: key = "value" (unquoted key, quoted value)
     _tf_kv = re.compile(r'^\s*([\w_]+)\s*=\s*"([^"]+)"')
@@ -354,9 +439,13 @@ def analyze_terraform(content: str, filename: str) -> list[tuple[str, str]]:
             continue
 
         if re.search(r'acl\s*=\s*"(public-read|public-read-write)"', line):
-            findings.append(
-                (f"Insecure S3 Bucket ACL (Public) in {filename}", "HIGH")
-            )
+            findings.append(Finding(
+                rule_name=f"Insecure S3 Bucket ACL (Public) in {filename}",
+                severity="HIGH",
+                filename=filename,
+                frameworks=["CIS AWS Foundations Benchmark 2.1.5", "PCI-DSS 4.0 Req 2.2"],
+                remediation="Remove the public ACL and enable Block Public Access.",
+            ))
 
         # Entropy scan on string values
         m = _tf_kv.match(raw_line)
@@ -371,12 +460,12 @@ def analyze_terraform(content: str, filename: str) -> list[tuple[str, str]]:
 
 # ── Generic Secrets analysis ──────────────────────────────────────────────────
 
-def analyze_generic_secrets(content: str, filename: str) -> list[tuple[str, str]]:
+def analyze_generic_secrets(content: str, filename: str) -> list[Finding]:
     """Scan generic configuration files (.env, .json, .conf) for secrets."""
-    findings: list[tuple[str, str]] = []
+    findings: list[Finding] = []
 
     # Match common KV structures: key=value, "key": "value", key: value
-    _generic_kv = re.compile(r'^\s*["\']?([\w.-]+)["\']?\s*[:=]\s*["\']?([^"\']+)["\']?\s*,?$')
+    _generic_kv = re.compile(r'^\s*["\']?([\w.-]+)["\']?\s*[:=]\s*["\']?([^"\']+ )["\']?\s*,?$')
 
     for raw_line in content.splitlines():
         line = raw_line.strip()
@@ -394,9 +483,8 @@ def analyze_generic_secrets(content: str, filename: str) -> list[tuple[str, str]
 
 
 # ── File dispatcher ──────────────────────────────────────────────────────────
-from typing import Union
 
-def scan_file(filepath: Path) -> list[Union[tuple[str, str], dict]]:
+def scan_file(filepath: Path) -> list[Finding]:
     """Scan a single file based on its name/extension."""
     try:
         content = filepath.read_text(encoding="utf-8")
@@ -429,21 +517,24 @@ def run_iac_audit(
     db_path: Path = DB_PATH,
     target_id: int = 1,
     persist: bool = True,
-) -> list[Union[tuple[str, str], dict]]:
+) -> list[Finding]:
     """Run the IaC audit against a file or directory.
 
-    Returns a list of mixed findings (tuple[str, str] or dict).
+    Returns a list of Finding objects.
     """
     path = Path(target_path)
     if not path.exists():
         raise IaCScannerError(f"Target path does not exist: {target_path}")
 
-    all_findings: list[Union[tuple[str, str], dict]] = []
+    all_findings: list[Finding] = []
 
     if path.is_file():
         all_findings.extend(scan_file(path))
     elif path.is_dir():
         for filepath in path.rglob("*"):
+            # Skip excluded directories
+            if any(part in _EXCLUDED_DIRS for part in filepath.parts):
+                continue
             if filepath.is_file() and (
                 "Dockerfile" in filepath.name
                 or filepath.name.endswith((".yaml", ".yml", ".tf", ".env", ".json", ".conf"))
@@ -454,19 +545,21 @@ def run_iac_audit(
     if persist and all_findings:
         rows = []
         for finding in all_findings:
-            if isinstance(finding, dict):
-                rows.append((target_id, finding["rule_name"], finding["severity"], "OPEN"))
-            else:
-                vuln_type, severity = finding
-                rows.append((target_id, vuln_type, severity, "OPEN"))
+            rows.append((
+                target_id,
+                finding.rule_name,
+                finding.severity,
+                "OPEN",
+                finding.filename,
+            ))
 
         try:
             initialize_database(db_path)
             with sqlite3.connect(db_path) as connection:
                 connection.executemany(
                     "INSERT INTO scan_results "
-                    "(target_id, vulnerability_type, severity, status) "
-                    "VALUES (?, ?, ?, ?)",
+                    "(target_id, vulnerability_type, severity, status, target_path) "
+                    "VALUES (?, ?, ?, ?, ?)",
                     rows,
                 )
                 connection.commit()

@@ -4,15 +4,24 @@ import { generateReport } from '../api';
 
 export default function Reports() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
 
   const handleGenerate = async (format: string) => {
+    setIsLoading(true);
+    setDownloadUrl(null);
     try {
       const result: any = await generateReport(format);
       setToastMessage(result.message);
-      setTimeout(() => setToastMessage(null), 3000);
-    } catch (e) {
+      if (result.downloadUrl) {
+        setDownloadUrl(result.downloadUrl);
+      }
+      setTimeout(() => setToastMessage(null), 5000);
+    } catch (_err) {
       setToastMessage('Error generating report');
       setTimeout(() => setToastMessage(null), 3000);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -28,9 +37,10 @@ export default function Reports() {
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             onClick={() => handleGenerate('markdown')}
-            className="mt-4 px-6 py-2 bg-white/10 hover:bg-white/20 border border-white/30 rounded text-white transition-colors"
+            disabled={isLoading}
+            className="mt-4 px-6 py-2 bg-white/10 hover:bg-white/20 border border-white/30 rounded text-white transition-colors disabled:opacity-50"
           >
-            Generate Markdown
+            {isLoading ? 'Generating...' : 'Generate Markdown'}
           </motion.button>
         </div>
 
@@ -41,10 +51,20 @@ export default function Reports() {
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             onClick={() => handleGenerate('sarif')}
-            className="mt-4 px-6 py-2 bg-neon/20 hover:bg-neon/30 border border-neon/50 rounded text-neon transition-colors"
+            disabled={isLoading}
+            className="mt-4 px-6 py-2 bg-neon/20 hover:bg-neon/30 border border-neon/50 rounded text-neon transition-colors disabled:opacity-50"
           >
-            Export SARIF
+            {isLoading ? 'Exporting...' : 'Export SARIF'}
           </motion.button>
+          {downloadUrl && (
+            <a
+              href={downloadUrl}
+              download="antifine_results.sarif"
+              className="text-neon underline text-sm hover:text-neon/80 transition-colors"
+            >
+              ⬇ Download SARIF File
+            </a>
+          )}
         </div>
       </div>
 

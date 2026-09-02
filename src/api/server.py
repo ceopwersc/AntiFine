@@ -4,10 +4,12 @@ Exposes the AntiFine Python engine capabilities as a local REST API
 for decoupling the frontend from the core execution logic.
 """
 
+import ipaddress
 import sqlite3
 import sys
 from pathlib import Path
 from typing import Dict, Any
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,10 +39,15 @@ except Exception:
 
 app = FastAPI(title="AntiFine Core Engine")
 
-# Add CORS middleware for frontend communication
+# Strict CORS: only allow local frontend dev server
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Local development
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -62,7 +69,33 @@ class WebhookModel(BaseModel):
 class WebhookTestModel(BaseModel):
     url: str
 
+
+# ── Severity rank helper ────────────────────────────────────────────────────
+
+_SEVERITY_RANKS = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+
+
+# ── Webhook URL validation ──────────────────────────────────────────────────
+
+def _validate_webhook_url(url: str) -> None:
+    """Reject dangerous webhook URLs (file://, private IPs, etc.)."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(status_code=422, detail=f"Unsupported URL scheme: {parsed.scheme}. Only http/https allowed.")
+    hostname = parsed.hostname
+    if not hostname:
+        raise HTTPException(status_code=422, detail="Webhook URL must have a hostname.")
+    try:
+        ip = ipaddress.ip_address(hostname)
+        if ip.is_private or ip.is_loopback or ip.is_reserved:
+            raise HTTPException(status_code=422, detail=f"Webhook URL must not target private/loopback IPs: {hostname}")
+    except ValueError:
+        # hostname is a domain name, not an IP — that's fine
+        pass
+
+
 def _dispatch_alerts_for_rows(rows: list, background_tasks: BackgroundTasks):
+    """Dispatch webhook alerts using >= severity rank comparison."""
     try:
         with sqlite3.connect(DB_PATH) as conn:
             webhooks = conn.execute("SELECT url, min_severity FROM webhooks").fetchall()
@@ -73,15 +106,41 @@ def _dispatch_alerts_for_rows(rows: list, background_tasks: BackgroundTasks):
         return
         
     for row in rows:
-        target_id, vuln_type, severity, status, framework = row
+        target_id, vuln_type, severity, status, *rest = row
+        sev_rank = _SEVERITY_RANKS.get(severity.upper(), 0)
         for url, min_severity in webhooks:
-            if severity.upper() == "CRITICAL" or severity.upper() == min_severity.upper() or min_severity.upper() == "ALL":
+            min_rank = _SEVERITY_RANKS.get(min_severity.upper(), 3)
+            if sev_rank >= min_rank:
                 finding_dict = {
                     "vulnerability_type": vuln_type,
                     "severity": severity,
-                    "compliance_tags": framework
+                    "compliance_tags": rest[0] if rest else "Unmapped",
                 }
                 background_tasks.add_task(dispatch_security_alert, finding_dict, url)
+
+
+# ── Path sandboxing ─────────────────────────────────────────────────────────
+
+def _resolve_and_sandbox(target_path: str) -> Path:
+    """Resolve a scan target path and ensure it stays within PROJECT_ROOT."""
+    target = Path(target_path)
+    if target.is_absolute():
+        raise HTTPException(
+            status_code=422,
+            detail="Absolute paths are not allowed. Provide a path relative to the project root."
+        )
+    resolved = (PROJECT_ROOT / target).resolve()
+    if not str(resolved).startswith(str(PROJECT_ROOT.resolve())):
+        raise HTTPException(
+            status_code=422,
+            detail="Path traversal detected. Target must be within the project root."
+        )
+    if not resolved.exists():
+        raise HTTPException(
+            status_code=422,
+            detail=f"Target path not found: '{target_path}' (resolved to '{resolved}')."
+        )
+    return resolved
 
 
 # ── Endpoints ───────────────────────────────────────────────────────────────
@@ -103,20 +162,28 @@ async def get_analytics_dashboard() -> Dict[str, Any]:
     
     try:
         with sqlite3.connect(DB_PATH) as conn:
-            # 1. Overall Compliance Score
-            failures = conn.execute(
-                "SELECT COUNT(*) FROM scan_results WHERE compliance_framework IS NOT NULL AND compliance_framework != 'Unmapped' AND status='OPEN'"
-            ).fetchone()[0]
-            score = max(0, 100 - (failures * 5))
-            
-            # 2. Severity Breakdown
-            counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+            # Weighted compliance score based on severity
             rows = conn.execute(
-                "SELECT UPPER(severity) AS sev, COUNT(*) FROM scan_results WHERE status='OPEN' GROUP BY sev"
+                "SELECT UPPER(severity) AS sev, COUNT(*) FROM scan_results "
+                "WHERE status='OPEN' GROUP BY sev"
             ).fetchall()
+            
+            penalty = 0
+            counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
             for sev, cnt in rows:
                 if sev in counts:
                     counts[sev] = cnt
+                if sev == "CRITICAL":
+                    penalty += cnt * 20
+                elif sev == "HIGH":
+                    penalty += cnt * 10
+                elif sev == "MEDIUM":
+                    penalty += cnt * 5
+                elif sev == "LOW":
+                    penalty += cnt * 1
+            
+            score = max(0, 100 - penalty)
+            
             severity_breakdown = [
                 {"name": "Critical", "value": counts["CRITICAL"]},
                 {"name": "High", "value": counts["HIGH"]},
@@ -124,7 +191,7 @@ async def get_analytics_dashboard() -> Dict[str, Any]:
                 {"name": "Low", "value": counts["LOW"]},
             ]
             
-            # 3. Historical Trends (last 7 dates with data)
+            # Historical Trends (last 7 dates with data)
             trend_rows = conn.execute(
                 "SELECT DATE(timestamp) as date, COUNT(*) FROM scan_results GROUP BY date ORDER BY date DESC LIMIT 7"
             ).fetchall()
@@ -205,60 +272,64 @@ async def run_ssrf_scan(req: SSRFScanRequest, background_tasks: BackgroundTasks)
 async def run_iac_scan(req: IaCScanRequest, background_tasks: BackgroundTasks) -> Dict[str, Any]:
     """Execute the IaC scanner against a local file or directory.
 
-    Resolves relative paths against the project root so that inputs like
-    'test_dockerfile' or './k8s/deployment.yaml' work from any CWD.
+    Resolves relative paths against the project root. Sandboxed to PROJECT_ROOT.
     Persists every finding (with compliance framework tag) to antifine.db
     and dispatches webhook alerts for HIGH/CRITICAL findings.
     """
     try:
-        # ── Resolve path: prefer absolute, fall back to PROJECT_ROOT-relative ──
-        target = Path(req.target_path)
-        if not target.is_absolute():
-            resolved = PROJECT_ROOT / target
-        else:
-            resolved = target
-
-        if not resolved.exists():
-            raise HTTPException(
-                status_code=422,
-                detail=f"Target path not found: '{req.target_path}' "
-                       f"(resolved to '{resolved}'). "
-                       f"Provide an absolute path or a path relative to the project root."
-            )
+        resolved = _resolve_and_sandbox(req.target_path)
 
         # ── Run the scanner (no internal persistence — we handle it here) ──────
         raw_findings = run_iac_audit(str(resolved), persist=False)
 
-        # ── Enrich each finding with full compliance cross-walk + remediation ──
+        # ── Build enriched response + DB rows from Finding objects ──────────────
         enriched: list[Dict[str, Any]] = []
         rows = []
-        for vuln_type, severity in raw_findings:
-            meta = get_finding_metadata(vuln_type)
-            primary_framework = meta["primary_framework"]
-            enriched.append({
-                "rule_name": vuln_type,
-                "severity": severity,
-                "compliance_framework": primary_framework,   # kept for UI compat
-                "frameworks": meta["frameworks"],            # full cross-walk list
-                "description": meta["description"],
-                "remediation": meta["remediation"],
-            })
-            rows.append((1, vuln_type, severity, "OPEN", primary_framework))
+        for finding in raw_findings:
+            # Use the Finding's own frameworks/remediation if present,
+            # otherwise fall back to the compliance mapper for legacy rules.
+            if finding.frameworks:
+                primary_framework = finding.frameworks[0]
+                frameworks_list = finding.frameworks
+                remediation = finding.remediation
+                description = finding.description or finding.rule_name
+            else:
+                meta = get_finding_metadata(finding.rule_name)
+                primary_framework = meta["primary_framework"]
+                frameworks_list = meta["frameworks"]
+                remediation = meta["remediation"]
+                description = meta["description"]
 
-        # ── Persist to database ───────────────────────────────────────────────
+            enriched.append({
+                "rule_name": finding.rule_name,
+                "severity": finding.severity,
+                "compliance_framework": primary_framework,
+                "frameworks": frameworks_list,
+                "description": description,
+                "remediation": remediation,
+            })
+            rows.append((1, finding.rule_name, finding.severity, "OPEN", primary_framework, finding.filename))
+
+        # ── Deduplicate: remove old findings for this target, then insert fresh ─
         if rows:
             try:
-                initialize_database()  # ensure DB and tables exist
+                initialize_database()
                 with sqlite3.connect(DB_PATH) as conn:
+                    # Delete previous findings for the same target path
+                    target_filenames = {finding.filename for finding in raw_findings}
+                    for tf in target_filenames:
+                        conn.execute(
+                            "DELETE FROM scan_results WHERE target_path = ?",
+                            (tf,),
+                        )
                     conn.executemany(
                         "INSERT INTO scan_results "
-                        "(target_id, vulnerability_type, severity, status, compliance_framework) "
-                        "VALUES (?, ?, ?, ?, ?)",
+                        "(target_id, vulnerability_type, severity, status, compliance_framework, target_path) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
                         rows,
                     )
                     conn.commit()
             except sqlite3.Error as db_exc:
-                # Log but don't abort — still return findings to the UI
                 print(f"[warn] DB write failed: {db_exc}", file=sys.stderr)
 
             _dispatch_alerts_for_rows(rows, background_tasks)
@@ -294,6 +365,7 @@ async def get_webhooks() -> Dict[str, Any]:
 
 @app.post("/api/integrations/webhooks")
 async def save_webhook(req: WebhookModel) -> Dict[str, Any]:
+    _validate_webhook_url(req.url)
     try:
         with sqlite3.connect(DB_PATH) as conn:
             conn.execute(
@@ -308,6 +380,7 @@ async def save_webhook(req: WebhookModel) -> Dict[str, Any]:
 
 @app.post("/api/integrations/test")
 async def test_webhook(req: WebhookTestModel, background_tasks: BackgroundTasks) -> Dict[str, Any]:
+    _validate_webhook_url(req.url)
     finding_dict = {
         "vulnerability_type": "Test Alert - AntiFine System Check",
         "severity": "CRITICAL",
@@ -326,24 +399,25 @@ async def export_iac_sarif() -> Dict[str, Any]:
             return generate_sarif([])
             
         with sqlite3.connect(DB_PATH) as conn:
-            # Join with a dummy target 'project-root' since target path is not in scan_results
             rows = conn.execute(
-                "SELECT vulnerability_type, severity, compliance_framework "
+                "SELECT vulnerability_type, severity, compliance_framework, target_path "
                 "FROM scan_results WHERE status='OPEN'"
             ).fetchall()
             
         findings = []
-        for vuln_type, severity, fw in rows:
+        for row in rows:
+            vuln_type = row[0]
+            severity = row[1]
+            fw = row[2]
+            target_path = row[3] if len(row) > 3 and row[3] else "project-root"
             findings.append({
                 "vulnerability_type": vuln_type,
                 "severity": severity,
                 "compliance_framework": fw,
-                "target": "project-root"
+                "target": target_path,
             })
             
         sarif_report = generate_sarif(findings)
-        
-        # FastAPI will automatically serialize dict to JSON response with application/json
         return sarif_report
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))

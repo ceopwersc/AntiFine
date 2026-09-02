@@ -9,8 +9,8 @@ def test_analyze_terraform_public_acl():
 }"""
     findings = analyze_terraform(content, "s3.tf")
     assert len(findings) == 1
-    assert "Insecure S3 Bucket ACL (Public)" in findings[0][0]
-    assert findings[0][1] == "HIGH"
+    assert "Insecure S3 Bucket ACL (Public)" in findings[0].rule_name
+    assert findings[0].severity == "HIGH"
     
 def test_analyze_terraform_public_read_write_acl():
     content = """resource "aws_s3_bucket_acl" "example" {
@@ -19,8 +19,8 @@ def test_analyze_terraform_public_read_write_acl():
 }"""
     findings = analyze_terraform(content, "s3.tf")
     assert len(findings) == 1
-    assert "Insecure S3 Bucket ACL (Public)" in findings[0][0]
-    assert findings[0][1] == "HIGH"
+    assert "Insecure S3 Bucket ACL (Public)" in findings[0].rule_name
+    assert findings[0].severity == "HIGH"
 
 def test_analyze_terraform_private_acl():
     content = """resource "aws_s3_bucket_acl" "example" {

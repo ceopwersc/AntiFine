@@ -180,7 +180,7 @@ def run_audit_iac(target_path: str, target_id: int = 1, dry_run: bool = False) -
         
     print(f"IaC audit: {len(findings)} insecure configuration(s) flagged.")
     for finding in findings:
-        print(f"  [{finding[1]:<8}] {finding[0]}")
+        print(f"  [{finding.severity:<8}] {finding.rule_name}")
         
     if dry_run:
         print("[info] Dry run: no rows written to the database.")

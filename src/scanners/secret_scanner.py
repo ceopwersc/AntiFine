@@ -1,5 +1,21 @@
+"""High-confidence vendor secret detection and entropy-based credential scanning.
+
+Uses exact vendor signature regexes (AWS, GitHub, Slack, Private Keys) and
+character-set adjusted Shannon entropy with false-positive allowlisting.
+"""
+
+from __future__ import annotations
+
 import math
 import re
+import sys
+from pathlib import Path
+
+PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.models.finding import Finding  # noqa: E402
 
 # ── Vendor Signature Regexes ──────────────────────────────────────────────
 _VENDOR_REGEXES = {
@@ -51,17 +67,28 @@ def scan_value_for_secrets(
     value: str,
     key_name: str,
     filename: str,
-) -> tuple[str, str] | None:
+) -> Finding | None:
     """Scan a string value for vendor secrets and high-entropy credentials.
     
-    Returns a (description, severity) tuple if a secret is found, else None.
+    Returns a Finding if a secret is found, else None.
     """
     # 1. Exact Vendor Signature Match
     for vendor_name, pattern in _VENDOR_REGEXES.items():
         if pattern.search(value) or pattern.search(key_name + "=" + value):
-            return (
-                f"Exact Vendor Match ({vendor_name}) in {filename} [{key_name}]",
-                "CRITICAL",
+            return Finding(
+                rule_name=f"Exact Vendor Match ({vendor_name}) in {filename} [{key_name}]",
+                severity="CRITICAL",
+                filename=filename,
+                frameworks=[
+                    "CIS Docker Benchmark 4.7",
+                    "CWE-798 (Use of Hard-coded Credentials)",
+                    "ISO 27001 A.8.24",
+                    "NIST SP 800-190 §3.3.1",
+                ],
+                remediation=(
+                    "Revoke token immediately and inject via external secret manager "
+                    "(e.g., AWS Secrets Manager, HashiCorp Vault)."
+                ),
             )
             
     # 2. Entropy Check
@@ -79,10 +106,22 @@ def scan_value_for_secrets(
     threshold = 3.0 if is_hex else 4.2
     
     if h >= threshold:
-        return (
-            f"Statistical Entropy (Shannon H >= {threshold}) in {filename} "
-            f"[{key_name}=... H={h:.2f}]",
-            "HIGH",
+        return Finding(
+            rule_name=(
+                f"Statistical Entropy (Shannon H >= {threshold}) in {filename} "
+                f"[{key_name}=... H={h:.2f}]"
+            ),
+            severity="HIGH",
+            filename=filename,
+            frameworks=[
+                "CIS Docker Benchmark 4.7",
+                "CWE-312 (Cleartext Storage of Sensitive Information)",
+                "ISO 27001 A.8.24",
+            ],
+            remediation=(
+                "Remove the high-entropy value from the configuration file.\n"
+                "Use a secrets manager to inject secrets at runtime."
+            ),
         )
         
     return None

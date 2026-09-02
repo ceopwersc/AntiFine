@@ -1,7 +1,12 @@
 """Tests for the TUI dashboard module."""
 
+import pytest
 import sqlite3
 from pathlib import Path
+
+# Skip these tests if rich is not available (headless CI)
+pytest.importorskip("rich")
+
 from src.ui.dashboard import build_summary_table, display_scan_summary, fetch_findings
 
 
@@ -62,6 +67,10 @@ def test_fetch_findings_missing_db(tmp_path):
 
 # ── Desktop App Tests ───────────────────────────────────────────────────
 
+@pytest.mark.skipif(
+    not pytest.importorskip("customtkinter", reason="customtkinter not installed"),
+    reason="customtkinter not installed"
+)
 def test_desktop_app_module_imports():
     """Verify the desktop_app module can be imported without errors."""
     from src.ui.desktop_app import AntiFineApp, launch_gui, _fetch_severity_counts
@@ -70,6 +79,10 @@ def test_desktop_app_module_imports():
     assert callable(_fetch_severity_counts)
 
 
+@pytest.mark.skipif(
+    not pytest.importorskip("customtkinter", reason="customtkinter not installed"),
+    reason="customtkinter not installed"
+)
 def test_desktop_app_severity_counts_missing_db(tmp_path):
     """Verify _fetch_severity_counts returns zeroes for non-existent DB."""
     from src.ui.desktop_app import _fetch_severity_counts
