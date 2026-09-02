@@ -9,19 +9,10 @@ export const fetchDashboardStats = async () => {
 };
 
 export const runScan = async (target: string, type: string) => {
-  // return (await apiClient.post('/scan', { target, type })).data;
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      resolve({
-        status: 'success',
-        message: `Scan initialized for ${target} (${type})`,
-        logs: `[INFO] Connecting to target ${target}...
-[INFO] Applying audit rules for ${type}...
-[WARN] Found exposed endpoint!
-[INFO] Scan completed.`
-      });
-    }, 1500);
-  });
+  const isIaC = type === 'IaC Config Audit';
+  const endpoint = isIaC ? '/scan/iac' : '/scan/ssrf';
+  const body = isIaC ? { target_path: target } : { target_url: target };
+  return (await apiClient.post(endpoint, body)).data;
 };
 
 export const generateReport = async (format: string) => {
