@@ -317,6 +317,37 @@ async def test_webhook(req: WebhookTestModel, background_tasks: BackgroundTasks)
     background_tasks.add_task(dispatch_security_alert, finding_dict, req.url)
     return {"status": "success", "message": "Test alert dispatched"}
 
+@app.get("/api/scan/iac/export/sarif")
+async def export_iac_sarif() -> Dict[str, Any]:
+    """Export all open IaC findings in SARIF 2.1.0 format."""
+    try:
+        from src.reporters.sarif_exporter import generate_sarif
+        if not DB_PATH.is_file():
+            return generate_sarif([])
+            
+        with sqlite3.connect(DB_PATH) as conn:
+            # Join with a dummy target 'project-root' since target path is not in scan_results
+            rows = conn.execute(
+                "SELECT vulnerability_type, severity, compliance_framework "
+                "FROM scan_results WHERE status='OPEN'"
+            ).fetchall()
+            
+        findings = []
+        for vuln_type, severity, fw in rows:
+            findings.append({
+                "vulnerability_type": vuln_type,
+                "severity": severity,
+                "compliance_framework": fw,
+                "target": "project-root"
+            })
+            
+        sarif_report = generate_sarif(findings)
+        
+        # FastAPI will automatically serialize dict to JSON response with application/json
+        return sarif_report
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
 
 @app.post("/api/report/generate")
 async def generate_reports() -> Dict[str, Any]:
