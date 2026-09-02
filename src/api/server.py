@@ -22,7 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from database.setup import DB_PATH, initialize_database
 from src.scanners.ssrf_scanner import run_web_audit
 from src.scanners.iac_audit import run_iac_audit
-from src.scanners.compliance_mapper import map_finding_to_framework
+from src.scanners.compliance_mapper import map_finding_to_framework, get_finding_metadata
 from src.reporting.generate import generate_report
 from src.reporting.sarif_exporter import export_to_sarif
 from src.integrations.soc_dispatcher import dispatch_security_alert
@@ -229,18 +229,21 @@ async def run_iac_scan(req: IaCScanRequest, background_tasks: BackgroundTasks) -
         # ── Run the scanner (no internal persistence — we handle it here) ──────
         raw_findings = run_iac_audit(str(resolved), persist=False)
 
-        # ── Enrich each finding with compliance framework tag ─────────────────
+        # ── Enrich each finding with full compliance cross-walk + remediation ──
         enriched: list[Dict[str, Any]] = []
         rows = []
         for vuln_type, severity in raw_findings:
-            framework = map_finding_to_framework(vuln_type)
+            meta = get_finding_metadata(vuln_type)
+            primary_framework = meta["primary_framework"]
             enriched.append({
                 "rule_name": vuln_type,
                 "severity": severity,
-                "compliance_framework": framework,
-                "description": vuln_type,  # human-readable in terminal
+                "compliance_framework": primary_framework,   # kept for UI compat
+                "frameworks": meta["frameworks"],            # full cross-walk list
+                "description": meta["description"],
+                "remediation": meta["remediation"],
             })
-            rows.append((1, vuln_type, severity, "OPEN", framework))
+            rows.append((1, vuln_type, severity, "OPEN", primary_framework))
 
         # ── Persist to database ───────────────────────────────────────────────
         if rows:
