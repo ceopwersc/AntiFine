@@ -198,6 +198,70 @@ _RULES: list[tuple] = [
         ),
     ),
 
+    # ── Kubernetes PSS: Host Namespace Access ──────────────────────────────
+    (
+        lambda v: "host namespace access" in v,
+        FindingMetadata(
+            primary_framework="CIS Kubernetes Benchmark 5.2.2",
+            frameworks=[
+                "CIS Kubernetes Benchmark 5.2.2",
+                "NIST SP 800-190",
+            ],
+            description=(
+                "Pod is allowed to access the host's PID, IPC, or Network namespace. "
+                "This violates the PSS Restricted profile and can allow host process manipulation."
+            ),
+            remediation=(
+                "# Remove hostPID, hostIPC, and hostNetwork from the PodSpec\n"
+                "# hostPID: false\n"
+                "# hostIPC: false\n"
+                "# hostNetwork: false"
+            ),
+        ),
+    ),
+
+    # ── Kubernetes PSS: Read-Only Root Filesystem ─────────────────────────
+    (
+        lambda v: "read-only root filesystem" in v,
+        FindingMetadata(
+            primary_framework="CIS Kubernetes Benchmark 5.2.6",
+            frameworks=[
+                "CIS Kubernetes Benchmark 5.2.6",
+                "PSS Restricted Profile",
+            ],
+            description=(
+                "Container root filesystem is not configured as read-only. "
+                "A read-only filesystem prevents attackers from installing malicious tools."
+            ),
+            remediation=(
+                "securityContext:\n"
+                "  readOnlyRootFilesystem: true"
+            ),
+        ),
+    ),
+
+    # ── Kubernetes PSS: Linux Capabilities ────────────────────────────────
+    (
+        lambda v: "linux capabilities" in v,
+        FindingMetadata(
+            primary_framework="CIS Kubernetes Benchmark 5.2.7",
+            frameworks=[
+                "CIS Kubernetes Benchmark 5.2.7",
+                "PSS Restricted Profile",
+            ],
+            description=(
+                "Container does not drop all Linux capabilities or adds dangerous capabilities "
+                "like CAP_SYS_ADMIN or CAP_NET_ADMIN."
+            ),
+            remediation=(
+                "securityContext:\n"
+                "  capabilities:\n"
+                "    drop:\n"
+                "      - ALL"
+            ),
+        ),
+    ),
+
     # ── Kubernetes: missing resource limits ───────────────────────────────
     (
         lambda v: "resource limits" in v or "missing resource" in v,
