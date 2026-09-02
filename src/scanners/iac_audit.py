@@ -308,6 +308,30 @@ def analyze_terraform(content: str, filename: str) -> list[tuple[str, str]]:
     return findings
 
 
+# ── Generic Secrets analysis ──────────────────────────────────────────────────
+
+def analyze_generic_secrets(content: str, filename: str) -> list[tuple[str, str]]:
+    """Scan generic configuration files (.env, .json, .conf) for secrets."""
+    findings: list[tuple[str, str]] = []
+
+    # Match common KV structures: key=value, "key": "value", key: value
+    _generic_kv = re.compile(r'^\s*["\']?([\w.-]+)["\']?\s*[:=]\s*["\']?([^"\']+)["\']?\s*,?$')
+
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(("#", "//")):
+            continue
+
+        m = _generic_kv.match(line)
+        if m:
+            key, val = m.group(1), m.group(2).strip()
+            ef = scan_value_for_secrets(val, key, filename)
+            if ef:
+                findings.append(ef)
+
+    return findings
+
+
 # ── File dispatcher ──────────────────────────────────────────────────────────
 
 def scan_file(filepath: Path) -> list[tuple[str, str]]:
@@ -330,6 +354,8 @@ def scan_file(filepath: Path) -> list[tuple[str, str]]:
         return analyze_kubernetes(content, filename)
     elif filename.endswith(".tf"):
         return analyze_terraform(content, filename)
+    elif filename.endswith((".env", ".json", ".conf")) or filename.startswith(".env"):
+        return analyze_generic_secrets(content, filename)
 
     return []
 
@@ -360,7 +386,8 @@ def run_iac_audit(
         for filepath in path.rglob("*"):
             if filepath.is_file() and (
                 "Dockerfile" in filepath.name
-                or filepath.name.endswith((".yaml", ".yml", ".tf"))
+                or filepath.name.endswith((".yaml", ".yml", ".tf", ".env", ".json", ".conf"))
+                or filepath.name.startswith(".env")
             ):
                 all_findings.extend(scan_file(filepath))
 
