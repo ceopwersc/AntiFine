@@ -302,9 +302,31 @@ _RULES: list[tuple] = [
         ),
     ),
 
-    # ── High-entropy credential exposure (Shannon H >= 3.8) ──────────────
+    # ── High-confidence vendor secret match ──────────────────────────────
     (
-        lambda v: "high entropy credential" in v or "shannon h" in v,
+        lambda v: "exact vendor match" in v,
+        FindingMetadata(
+            primary_framework="CIS Docker Benchmark 4.7",
+            frameworks=[
+                "CIS Docker Benchmark 4.7",
+                "CWE-798 (Use of Hard-coded Credentials)",
+                "ISO 27001 A.8.24",
+                "NIST SP 800-190 §3.3.1",
+            ],
+            description=(
+                "An exact signature match for a known vendor credential (e.g., AWS, GitHub, Slack) "
+                "was found. This is a high-confidence finding of leaked credentials."
+            ),
+            remediation=(
+                "Revoke token immediately and inject via external secret manager "
+                "(e.g., AWS Secrets Manager, HashiCorp Vault)."
+            ),
+        ),
+    ),
+
+    # ── High-entropy credential exposure ─────────────────────────────────
+    (
+        lambda v: "statistical entropy" in v or "high entropy credential" in v,
         FindingMetadata(
             primary_framework="CIS Docker Benchmark 4.7",
             frameworks=[
@@ -314,10 +336,9 @@ _RULES: list[tuple] = [
                 "NIST SP 800-190 §3.3.1",
             ],
             description=(
-                "A string value with high Shannon entropy (H \u2265 3.8 bits/char) was found "
+                "A string value with high statistical entropy was found "
                 "in a configuration instruction. High entropy is a strong indicator of an "
-                "embedded secret, token, or base64-encoded credential, even when the "
-                "variable name appears innocuous."
+                "embedded secret, token, or base64/hex-encoded credential."
             ),
             remediation=(
                 "# Remove the high-entropy value from the configuration file.\n"

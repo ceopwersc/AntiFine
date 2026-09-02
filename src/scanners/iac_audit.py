@@ -22,62 +22,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from database.setup import DB_PATH, initialize_database  # noqa: E402
+from src.scanners.secret_scanner import scan_value_for_secrets  # noqa: E402
 
 
 class IaCScannerError(RuntimeError):
     """Raised when the IaC audit fails."""
 
-
-# ── Shannon Entropy utilities ────────────────────────────────────────────────
-
-ENTROPY_MIN_LENGTH: int = 16   # minimum token length to consider
-ENTROPY_THRESHOLD: float = 3.8  # bits; tuned to catch base64/hex with low FP rate
-
-
-def calculate_entropy(data: str) -> float:
-    """Compute Shannon entropy of *data* in bits per character.
-
-    Formula: H(X) = -Sigma P(x_i) * log2 P(x_i)
-
-    Returns 0.0 for empty or single-character strings.
-    """
-    if len(data) < 2:
-        return 0.0
-    freq: dict[str, int] = {}
-    for ch in data:
-        freq[ch] = freq.get(ch, 0) + 1
-    n = len(data)
-    return -sum((count / n) * math.log2(count / n) for count in freq.values())
-
-
-def _scan_value_for_entropy(
-    value: str,
-    key_name: str,
-    filename: str,
-) -> tuple[str, str] | None:
-    """Return a finding tuple if *value* looks like a high-entropy secret.
-
-    Two-stage check:
-    1. Keyword match on *key_name* (fast, low-cost).
-    2. Entropy gate on *value* for obfuscated variable names.
-
-    Only tokens whose stripped length is >= ENTROPY_MIN_LENGTH are considered
-    for the entropy path, which keeps false-positive rates low on short values
-    such as UUIDs or version strings.
-    """
-    stripped = value.strip('"\'  \t')
-    if not stripped:
-        return None
-
-    h = calculate_entropy(stripped)
-
-    if len(stripped) >= ENTROPY_MIN_LENGTH and h >= ENTROPY_THRESHOLD:
-        return (
-            f"High Entropy Credential Exposure (Shannon H >= {ENTROPY_THRESHOLD}) "
-            f"in {filename} [{key_name}=... H={h:.2f}]",
-            "HIGH",
-        )
-    return None
 
 
 # ── Dockerfile analysis ──────────────────────────────────────────────────────
@@ -201,9 +151,6 @@ def analyze_dockerfile(content: str, filename: str) -> list[tuple[str, str]]:
         stage_label = stage.label
         has_user = False
         has_healthcheck = False
-        # Track global line indices where a keyword match fired so
-        # entropy scan doesn't double-report the same line.
-        keyword_flagged: set[int] = set()
 
         for line, global_idx in zip(stage.lines, stage.line_indices):
             upper = line.upper()
@@ -245,19 +192,16 @@ def analyze_dockerfile(content: str, filename: str) -> list[tuple[str, str]]:
                 key = key.strip()
                 val = val.strip()
 
-                # Stage 1 -- keyword name match (CRITICAL, any stage)
-                if _SECRET_ENV_PATTERN.match(line):
+                # Stage 1 -- Deep scan (Vendor exact match or Entropy)
+                ef = scan_value_for_secrets(val, key, filename)
+                if ef:
+                    findings.append(ef)
+                # Stage 2 -- Fallback keyword name match (CRITICAL, any stage)
+                elif _SECRET_ENV_PATTERN.match(line):
                     findings.append((
                         f"Hardcoded Secret in ENV Instruction in {filename}",
                         "CRITICAL",
                     ))
-                    keyword_flagged.add(global_idx)
-
-                # Stage 2 -- high-entropy value check (HIGH, any stage)
-                if global_idx not in keyword_flagged and val:
-                    ef = _scan_value_for_entropy(val, key, filename)
-                    if ef:
-                        findings.append(ef)
 
             # ── FROM unpinned image (applies to every stage) ──────────────
             elif upper.startswith("FROM "):
@@ -327,7 +271,7 @@ def analyze_kubernetes(content: str, filename: str) -> list[tuple[str, str]]:
         if not m:
             continue
         key, val = m.group(1), m.group(2).strip()
-        ef = _scan_value_for_entropy(val, key, filename)
+        ef = scan_value_for_secrets(val, key, filename)
         if ef:
             findings.append(ef)
 
@@ -357,7 +301,7 @@ def analyze_terraform(content: str, filename: str) -> list[tuple[str, str]]:
         m = _tf_kv.match(raw_line)
         if m:
             key, val = m.group(1), m.group(2)
-            ef = _scan_value_for_entropy(val, key, filename)
+            ef = scan_value_for_secrets(val, key, filename)
             if ef:
                 findings.append(ef)
 
