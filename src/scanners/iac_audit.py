@@ -430,30 +430,122 @@ def analyze_terraform(content: str, filename: str) -> list[Finding]:
     """Scan a Terraform file for security misconfigurations."""
     findings: list[Finding] = []
 
-    # Match HCL assignment: key = "value" (unquoted key, quoted value)
-    _tf_kv = re.compile(r'^\s*([\w_]+)\s*=\s*"([^"]+)"')
+    import hcl2
+    try:
+        doc = hcl2.loads(content)
+    except Exception as exc:
+        findings.append(Finding(
+            rule_name=f"HCL Parse Error in {filename}",
+            severity="CRITICAL",
+            filename=filename,
+            frameworks=["Internal"],
+            remediation="Fix the HCL syntax before scanning.",
+            description=str(exc),
+        ))
+        return findings
 
-    for raw_line in content.splitlines():
-        line = raw_line.strip()
-        if line.startswith("#") or line.startswith("//"):
-            continue
+    # Reuse the YAML string walker for entropy and embedded secrets
+    findings.extend(_walk_yaml_strings(doc, filename))
 
-        if re.search(r'acl\s*=\s*"(public-read|public-read-write)"', line):
+    resources = doc.get("resource", [])
+    
+    s3_buckets = []
+    sse_configs = []
+    pab_configs = []
+    
+    for res_dict in resources:
+        for res_type_raw, instances in res_dict.items():
+            res_type = res_type_raw.strip('"\'')
+            for res_name_raw, res_config in instances.items():
+                res_name = res_name_raw.strip('"\'')
+                
+                if res_type == "aws_s3_bucket":
+                    s3_buckets.append((res_name, res_config))
+                elif res_type == "aws_s3_bucket_server_side_encryption_configuration":
+                    sse_configs.append((res_name, res_config))
+                elif res_type == "aws_s3_bucket_public_access_block":
+                    pab_configs.append((res_name, res_config))
+                
+                # a) Open Ingress Ports (CRITICAL)
+                if res_type in ("aws_security_group", "aws_security_group_rule"):
+                    ingress_rules = []
+                    if res_type == "aws_security_group_rule" and str(res_config.get("type", "")).strip('"\'') == "ingress":
+                        ingress_rules.append(res_config)
+                    elif res_type == "aws_security_group":
+                        ig = res_config.get("ingress", [])
+                        if isinstance(ig, list):
+                            ingress_rules.extend(ig)
+                        elif isinstance(ig, dict):
+                            ingress_rules.append(ig)
+                    
+                    for rule in ingress_rules:
+                        cidrs = rule.get("cidr_blocks", [])
+                        cidrs_str = str(cidrs).replace('"', '').replace("'", "")
+                        if "0.0.0.0/0" in cidrs_str or "::/0" in cidrs_str:
+                            from_port = rule.get("from_port")
+                            to_port = rule.get("to_port")
+                            
+                            try:
+                                fp = int(from_port) if from_port is not None else None
+                                tp = int(to_port) if to_port is not None else None
+                            except (ValueError, TypeError):
+                                continue
+                                
+                            if fp is not None and tp is not None:
+                                if (fp <= 22 <= tp) or (fp <= 3389 <= tp):
+                                    findings.append(Finding(
+                                        rule_name=f"Open Ingress Port ({fp}-{tp}) to 0.0.0.0/0 in {filename}",
+                                        severity="CRITICAL",
+                                        filename=filename,
+                                        frameworks=["CIS AWS Foundations Benchmark 5.2", "PCI-DSS 4.0 Req 1.3.1"],
+                                        remediation="Restrict ingress cidr_blocks to specific trusted corporate CIDRs or bastion host."
+                                    ))
+
+                # c) Publicly Accessible Databases (CRITICAL)
+                if res_type == "aws_db_instance":
+                    if str(res_config.get("publicly_accessible", "")).lower() == "true":
+                        findings.append(Finding(
+                            rule_name=f"Publicly Accessible Database ({res_name}) in {filename}",
+                            severity="CRITICAL",
+                            filename=filename,
+                            frameworks=["CIS AWS Foundations Benchmark 2.3.1", "PCI-DSS 4.0 Req 1.3.2"],
+                            remediation="Set publicly_accessible = false and deploy the database inside private subnets."
+                        ))
+
+    # b) & d) Check S3 Buckets for SSE and PAB
+    for b_name, b_config in s3_buckets:
+        has_embedded_sse = "server_side_encryption_configuration" in b_config
+        has_companion_sse = False
+        for sse_name, sse_config in sse_configs:
+            bucket_ref = str(sse_config.get("bucket", ""))
+            if b_name in bucket_ref:
+                has_companion_sse = True
+                break
+                
+        if not (has_embedded_sse or has_companion_sse):
             findings.append(Finding(
-                rule_name=f"Insecure S3 Bucket ACL (Public) in {filename}",
+                rule_name=f"Unencrypted S3 Storage ({b_name}) in {filename}",
                 severity="HIGH",
                 filename=filename,
-                frameworks=["CIS AWS Foundations Benchmark 2.1.5", "PCI-DSS 4.0 Req 2.2"],
-                remediation="Remove the public ACL and enable Block Public Access.",
+                frameworks=["CIS AWS Foundations Benchmark 2.1.1", "NIST SP 800-190 Section 3.3.4"],
+                remediation='resource "aws_s3_bucket_server_side_encryption_configuration" "example" {\n  bucket = aws_s3_bucket.example.id\n  rule {\n    apply_server_side_encryption_by_default {\n      sse_algorithm = "AES256"\n    }\n  }\n}'
             ))
-
-        # Entropy scan on string values
-        m = _tf_kv.match(raw_line)
-        if m:
-            key, val = m.group(1), m.group(2)
-            ef = scan_value_for_secrets(val, key, filename)
-            if ef:
-                findings.append(ef)
+            
+        has_pab = False
+        for pab_name, pab_config in pab_configs:
+            bucket_ref = str(pab_config.get("bucket", ""))
+            if b_name in bucket_ref:
+                has_pab = True
+                break
+                
+        if not has_pab:
+            findings.append(Finding(
+                rule_name=f"S3 Public Access Block Missing ({b_name}) in {filename}",
+                severity="HIGH",
+                filename=filename,
+                frameworks=["CIS AWS Foundations Benchmark 2.1.5"],
+                remediation='resource "aws_s3_bucket_public_access_block" "example" {\n  bucket = aws_s3_bucket.example.id\n  block_public_acls       = true\n  block_public_policy     = true\n  ignore_public_acls      = true\n  restrict_public_buckets = true\n}'
+            ))
 
     return findings
 

@@ -6,4 +6,4 @@ uvicorn
 pydantic
 httpx
 PyYAML
-pyyaml
+python-hcl2
