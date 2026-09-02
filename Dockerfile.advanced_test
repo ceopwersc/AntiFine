@@ -1,0 +1,12 @@
+FROM python:3.12-slim AS builder
+USER root
+RUN apt-get update && apt-get install -y gcc
+
+ENV AWS_SECRET_ACCESS_KEY="aws_secret_access_key=O7g8P4d5/xY1M0J2N3q+R6s9T8u7V5W4xY3zX123"
+ENV HIGH_ENTROPY_TOKEN="b23b184b2c151121d5c589b27da6eb230f81d113c49e2cf4b92b512c"
+
+FROM python:3.12-slim
+COPY --from=builder /app /app
+# Missing USER directive -> Runs as root
+# Missing HEALTHCHECK
+CMD ["python", "app.py"]

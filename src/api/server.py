@@ -410,10 +410,16 @@ async def export_iac_sarif() -> Dict[str, Any]:
             severity = row[1]
             fw = row[2]
             target_path = row[3] if len(row) > 3 and row[3] else "project-root"
+            
+            from src.scanners.compliance_mapper import get_finding_metadata
+            meta = get_finding_metadata(vuln_type)
+            
             findings.append({
                 "vulnerability_type": vuln_type,
                 "severity": severity,
                 "compliance_framework": fw,
+                "frameworks": meta["frameworks"],
+                "remediation": meta["remediation"],
                 "target": target_path,
             })
             

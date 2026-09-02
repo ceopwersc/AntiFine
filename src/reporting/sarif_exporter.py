@@ -88,6 +88,8 @@ def generate_sarif(findings: list[dict[str, Any]]) -> dict[str, Any]:
         vuln_type = finding.get("vulnerability_type", "Unknown Vulnerability")
         severity = finding.get("severity", "LOW").upper()
         level = severity_map.get(severity, "note")
+        frameworks = finding.get("frameworks", [])
+        remediation = finding.get("remediation", "")
         
         # Generate a stable rule ID based on the vulnerability type hash
         rule_hash = hashlib.md5(vuln_type.encode('utf-8')).hexdigest()[:6]
@@ -97,7 +99,11 @@ def generate_sarif(findings: list[dict[str, Any]]) -> dict[str, Any]:
             rules.append({
                 "id": rule_id,
                 "shortDescription": {"text": vuln_type},
-                "defaultConfiguration": {"level": level}
+                "defaultConfiguration": {"level": level},
+                "properties": {
+                    "frameworks": frameworks,
+                    "tags": frameworks
+                }
             })
             seen_rules.add(rule_id)
             
@@ -115,7 +121,10 @@ def generate_sarif(findings: list[dict[str, Any]]) -> dict[str, Any]:
                         }
                     }
                 }
-            ]
+            ],
+            "properties": {
+                "remediation": remediation
+            }
         })
 
     return {
