@@ -44,7 +44,7 @@ import {
   Terminal,
   X,
 } from 'lucide-react';
-import { askAntiFine, explainFinding, fetchAIHealth, generateReport, remediateFinding, runScan, type AskContext, type AskResponse, type FindingExplanation } from './api';
+import { askAntiFine, explainFinding, explainRemediation, fetchAIHealth, generateReport, remediateFinding, runScan, type AskContext, type AskResponse, type FindingExplanation, type RemediationExplanation } from './api';
 import { Area, AreaChart, ResponsiveContainer, Tooltip } from 'recharts';
 
 type Severity = 'Critical' | 'High' | 'Medium' | 'Low';
@@ -497,6 +497,10 @@ function AskAntiFinePage({
   </div>;
 }
 
+function remediationDiff(before: string, after: string) {
+  return `--- deterministic before\n+++ deterministic after\n${before.split('\n').map((line) => `- ${line}`).join('\n')}\n${after.split('\n').map((line) => `+ ${line}`).join('\n')}`;
+}
+
 function FindingDrawer({
   finding,
   onClose,
@@ -541,6 +545,9 @@ function RemediationModal({ finding, onClose, onApplied }: { finding: Finding; o
   const [applying, setApplying] = useState(false);
   const [applied, setApplied] = useState(false);
   const [remediationError, setRemediationError] = useState('');
+  const [reviewExplanation, setReviewExplanation] = useState<RemediationExplanation | null>(null);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [reviewError, setReviewError] = useState('');
   const apply = async () => {
     setApplying(true);
     setRemediationError('');
@@ -555,7 +562,33 @@ function RemediationModal({ finding, onClose, onApplied }: { finding: Finding; o
       setApplying(false);
     }
   };
-  return <motion.div className="modal-scrim" role="dialog" aria-modal="true" aria-label="Review remediation" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}><motion.div className="remediation-modal" initial={{ opacity: 0, y: 16, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }}><div className="modal-header"><div><span className="drawer-eyebrow">Deterministic remediation</span><h2>Review proposed fix</h2><p>Inspect the exact change before applying it to <code>{finding.file}</code>.</p></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={19} /></button></div><div className="diff-meta"><span><FileCode2 size={15} />{finding.file}</span><span>Line {finding.line}</span><span className="diff-safe"><ShieldCheck size={14} />Safe to apply</span></div><div className="diff-view"><div className="diff-column"><div className="diff-column-header removed">Before <span>−</span></div><pre>{finding.before.split('\n').map((line, index) => <div key={`${line}-${index}`} className="diff-line removed-line"><span>{String(index + 1).padStart(2, '0')}</span>{line || ' '}</div>)}</pre></div><div className="diff-column"><div className="diff-column-header added">After <span>＋</span></div><pre>{finding.after.split('\n').map((line, index) => <div key={`${line}-${index}`} className="diff-line added-line"><span>{String(index + 1).padStart(2, '0')}</span>{line || ' '}</div>)}</pre></div></div>  <div className={`modal-callout${remediationError ? ' modal-callout-error' : ''}`}><ShieldCheck size={17} /><div><strong>{remediationError ? 'Fix could not be applied' : 'What will happen'}</strong><span>{remediationError || 'AntiFine creates a backup, applies the allowlisted fix, then re-scans the target to verify the result.'}</span></div></div><div className="modal-footer"><button className="button button-secondary" onClick={onClose}>Cancel</button>{applied ? <button className="button button-success" onClick={onClose}><Check size={15} />Fix applied</button> : <button className="button button-primary" disabled={applying} onClick={() => void apply()}>{applying ? <><RefreshCw size={15} className="spin" />Applying fix…</> : <><Sparkles size={15} />Apply deterministic fix</>}</button>}</div></motion.div></motion.div>;
+  const explainFix = async () => {
+    setReviewLoading(true);
+    setReviewError('');
+    try {
+      const result = await explainRemediation({
+        finding: {
+          rule_name: finding.rule_name,
+          severity: finding.severity.toUpperCase(),
+          filename: finding.file,
+          frameworks: finding.frameworks,
+          remediation: finding.remediation,
+          description: finding.description,
+        },
+        before: finding.before,
+        after: finding.after,
+        diff: remediationDiff(finding.before, finding.after),
+        remediation: finding.remediation,
+        frameworks: finding.frameworks,
+      });
+      setReviewExplanation(result);
+    } catch (error: any) {
+      setReviewError(error?.response?.data?.detail || 'Local AI unavailable');
+    } finally {
+      setReviewLoading(false);
+    }
+  };
+  return <motion.div className="modal-scrim" role="dialog" aria-modal="true" aria-label="Review remediation" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}><motion.div className="remediation-modal" initial={{ opacity: 0, y: 16, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }}><div className="modal-header"><div><span className="drawer-eyebrow">Deterministic remediation</span><h2>Review proposed fix</h2><p>Inspect the exact change before applying it to <code>{finding.file}</code>.</p></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={19} /></button></div><div className="diff-meta"><span><FileCode2 size={15} />{finding.file}</span><span>Line {finding.line}</span><span className="diff-safe"><ShieldCheck size={14} />Deterministic proposal</span></div><div className="diff-view"><div className="diff-column"><div className="diff-column-header removed">Before <span>−</span></div><pre>{finding.before.split('\n').map((line, index) => <div key={`${line}-${index}`} className="diff-line removed-line"><span>{String(index + 1).padStart(2, '0')}</span>{line || ' '}</div>)}</pre></div><div className="diff-column"><div className="diff-column-header added">After <span>＋</span></div><pre>{finding.after.split('\n').map((line, index) => <div key={`${line}-${index}`} className="diff-line added-line"><span>{String(index + 1).padStart(2, '0')}</span>{line || ' '}</div>)}</pre></div></div><section className="remediation-ai-review" aria-live="polite"><div className="section-heading-row"><div><h3>AI explanation</h3><span className="ai-label">Local AI · Ollama</span></div>{reviewExplanation && <button className="text-button" onClick={() => void explainFix()} disabled={reviewLoading}>{reviewLoading ? 'Analyzing remediation locally…' : 'Regenerate'}</button>}</div><p className="ai-disclaimer">Optional review of the deterministic AntiFine proposal. AI does not approve or apply this fix.</p>{reviewError ? <div className="ai-error"><strong>Local AI unavailable</strong><span>AntiFine can still preview, apply, and verify this deterministic fix.</span><button className="text-button" onClick={() => void explainFix()} disabled={reviewLoading}>Retry</button></div> : reviewExplanation ? <div className="ai-response"><span className="ai-model">{reviewExplanation.model} · generated locally</span>{renderExplanation(reviewExplanation.explanation)}</div> : <button className="button button-secondary ai-explain-button" onClick={() => void explainFix()} disabled={reviewLoading}>{reviewLoading ? <><RefreshCw size={15} className="spin" />Analyzing remediation locally…</> : <><Sparkles size={15} />Explain this Fix</>}</button>}</section><div className={`modal-callout${remediationError ? ' modal-callout-error' : ''}`}><ShieldCheck size={17} /><div><strong>{remediationError ? 'Fix could not be applied' : 'What will happen'}</strong><span>{remediationError || 'AntiFine creates a backup, applies the allowlisted fix, then re-scans the target to verify the result.'}</span></div></div><div className="modal-footer"><button className="button button-secondary" onClick={onClose}>Cancel</button>{applied ? <button className="button button-success" onClick={onClose}><Check size={15} />Fix applied</button> : <button className="button button-primary" disabled={applying} onClick={() => void apply()}>{applying ? <><RefreshCw size={15} className="spin" />Applying fix…</> : <><Sparkles size={15} />Apply deterministic fix</>}</button>}</div></motion.div></motion.div>;
 }
 
 function CompliancePage() {
