@@ -21,6 +21,24 @@ export interface FindingExplanation {
   generated_locally: boolean;
 }
 
+export interface RemediationExplanationRequest {
+  finding: ExplainableFinding;
+  before: string;
+  after: string;
+  diff: string;
+  remediation: string;
+  frameworks: string[];
+}
+
+export interface RemediationExplanation extends FindingExplanation {}
+
+export const explainRemediation = async (
+  request: RemediationExplanationRequest,
+): Promise<RemediationExplanation> => {
+  const response = await apiClient.post<RemediationExplanation>('/ai/remediation/explain', request);
+  return response.data;
+};
+
 export const fetchDashboardStats = async () => {
   return (await apiClient.get('/dashboard')).data;
 };

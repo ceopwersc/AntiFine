@@ -41,6 +41,10 @@ from src.services.ai_explanation import (
     build_explanation_prompt,
     finding_id,
 )
+from src.services.remediation_explanation import (
+    REMEDIATION_REVIEW_SYSTEM_PROMPT,
+    build_remediation_review_prompt,
+)
 from src.ai.knowledge_service import find_rule_for_finding
 
 
@@ -93,6 +97,14 @@ class AITestRequest(BaseModel):
 class FindingExplanationRequest(BaseModel):
     finding: Finding
     code_context: str | None = None
+
+class RemediationExplanationRequest(BaseModel):
+    finding: Finding
+    before: str
+    after: str
+    diff: str
+    remediation: str = ""
+    frameworks: list[str] = []
 
 
 # ── Severity rank helper ────────────────────────────────────────────────────
@@ -348,6 +360,37 @@ async def explain_finding(req: FindingExplanationRequest) -> Dict[str, Any]:
             ),
             system_prompt=SYSTEM_PROMPT,
         )
+        return {
+            "finding_id": finding_id(req.finding),
+            "model": service.config.model,
+            "provider": "ollama",
+            "explanation": explanation,
+            "generated_locally": True,
+        }
+    except OllamaDisabledError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except OllamaError as exc:
+        raise HTTPException(status_code=502, detail=_ollama_error_message(exc)) from exc
+
+
+@app.post("/api/ai/remediation/explain")
+async def explain_remediation(req: RemediationExplanationRequest) -> Dict[str, Any]:
+    """Explain an existing deterministic remediation without changing it."""
+    service = OllamaService()
+    try:
+        explanation = await service.generate(
+            build_remediation_review_prompt(
+                req.finding,
+                req.before,
+                req.after,
+                req.diff,
+                req.remediation,
+                req.frameworks,
+            ),
+            system_prompt=REMEDIATION_REVIEW_SYSTEM_PROMPT,
+        )
+        if not explanation.strip():
+            raise OllamaError("Ollama returned an empty remediation explanation")
         return {
             "finding_id": finding_id(req.finding),
             "model": service.config.model,
