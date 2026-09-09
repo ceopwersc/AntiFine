@@ -182,9 +182,3 @@ python src/main.py --gui
 ```
 
 ---
-
-## Running Tests
-Run the test suite using pytest:
-```bash
-python -m pytest tests/ -v
-```

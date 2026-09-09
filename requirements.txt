@@ -1,5 +1,4 @@
-pytest
-pytest-httpx
+
 rich
 fastapi
 uvicorn
