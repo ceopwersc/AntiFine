@@ -15,6 +15,13 @@ export const runScan = async (target: string, type: string) => {
   return (await apiClient.post(endpoint, body)).data;
 };
 
+export const remediateFinding = async (target: string, ruleName: string) => {
+  return (await apiClient.post('/scan/iac/remediate', {
+    target_path: target,
+    rule_name: ruleName,
+  })).data;
+};
+
 export const generateReport = async (format: string) => {
   if (format === 'sarif') {
     const resp = await apiClient.get('/scan/iac/export/sarif');

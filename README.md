@@ -85,6 +85,14 @@ npm run dev
 ```
 Visit `http://localhost:5173` to see compliance dashboards, run scans, and generate reports.
 
+### Deterministic remediation
+The dashboard can apply supported fixes from the finding drawer through
+`POST /api/scan/iac/remediate`. The endpoint is restricted to project-relative
+files, creates a sibling `<filename>.bak` backup before writing, rejects
+unsupported rules, and re-scans the file before returning the remaining
+findings. It currently supports safe Dockerfile USER/HEALTHCHECK fixes,
+Kubernetes privilege flags, and Terraform `publicly_accessible = false`.
+
 ### GUI Testing
 To run the Desktop CustomTkinter interface (Optional):
 ```bash

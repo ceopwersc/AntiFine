@@ -24,6 +24,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from database.setup import DB_PATH, initialize_database
 from src.scanners.ssrf_scanner import run_web_audit
 from src.scanners.iac_audit import run_iac_audit
+from src.scanners.remediation import RemediationError, remediate_file
 from src.scanners.compliance_mapper import map_finding_to_framework, get_finding_metadata
 from src.reporting.generate import generate_report
 from src.reporting.sarif_exporter import export_to_sarif
@@ -61,6 +62,10 @@ class SSRFScanRequest(BaseModel):
 
 class IaCScanRequest(BaseModel):
     target_path: str
+
+class RemediationRequest(BaseModel):
+    target_path: str
+    rule_name: str
 
 class WebhookModel(BaseModel):
     url: str
@@ -351,6 +356,32 @@ async def run_iac_scan(req: IaCScanRequest, background_tasks: BackgroundTasks) -
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/scan/iac/remediate")
+async def remediate_iac(req: RemediationRequest) -> Dict[str, Any]:
+    """Safely apply one supported fix, back up the file, and re-scan it."""
+    try:
+        resolved = _resolve_and_sandbox(req.target_path)
+        result = remediate_file(resolved, req.rule_name)
+        findings = run_iac_audit(str(resolved), persist=False)
+        return {
+            "status": "remediated",
+            "target": str(resolved),
+            "backup": str(result.backup_path),
+            "action": result.action,
+            "findings_count": len(findings),
+            "findings": [
+                {"rule_name": f.rule_name, "severity": f.severity}
+                for f in findings
+            ],
+        }
+    except (RemediationError, UnicodeDecodeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Could not update target: {exc}") from exc
 
 
 @app.get("/api/integrations/webhooks")
