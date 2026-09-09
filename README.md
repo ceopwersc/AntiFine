@@ -93,6 +93,40 @@ unsupported rules, and re-scans the file before returning the remaining
 findings. It currently supports safe Dockerfile USER/HEALTHCHECK fixes,
 Kubernetes privilege flags, and Terraform `publicly_accessible = false`.
 
+### Optional local Ollama integration
+AntiFine works normally without Ollama. The optional AI integration only
+provides a direct local text-generation test endpoint; it is not used by
+scanning, secret detection, compliance mapping, remediation, or CI gates.
+
+Configure it with environment variables:
+
+```bash
+OLLAMA_ENABLED=true
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=qwen2.5:7b
+OLLAMA_TIMEOUT=30
+```
+
+Start Ollama and pull the default model:
+
+```bash
+ollama serve
+ollama pull qwen2.5:7b
+```
+
+Check the integration without exposing credentials:
+
+```bash
+curl http://127.0.0.1:8000/api/ai/health
+curl -X POST http://127.0.0.1:8000/api/ai/test \
+  -H "Content-Type: application/json" \
+  -d "{\"prompt\":\"Explain Terraform in one sentence.\"}"
+```
+
+`GET /api/ai/health` reports whether the configured model is available.
+`POST /api/ai/test` rejects empty prompts and returns a clean error if the
+integration is disabled or Ollama cannot be reached.
+
 ### GUI Testing
 To run the Desktop CustomTkinter interface (Optional):
 ```bash

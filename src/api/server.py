@@ -29,6 +29,12 @@ from src.scanners.compliance_mapper import map_finding_to_framework, get_finding
 from src.reporting.generate import generate_report
 from src.reporting.sarif_exporter import export_to_sarif
 from src.integrations.soc_dispatcher import dispatch_security_alert
+from src.services.ollama_service import (
+    OllamaConfig,
+    OllamaDisabledError,
+    OllamaError,
+    OllamaService,
+)
 
 
 # ── Initialization ──────────────────────────────────────────────────────────
@@ -74,10 +80,21 @@ class WebhookModel(BaseModel):
 class WebhookTestModel(BaseModel):
     url: str
 
+class AITestRequest(BaseModel):
+    prompt: str
+
 
 # ── Severity rank helper ────────────────────────────────────────────────────
 
 _SEVERITY_RANKS = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+
+
+def _ollama_error_message(exc: OllamaError) -> str:
+    if isinstance(exc, OllamaDisabledError):
+        return "Ollama integration is disabled"
+    if "not reachable" in str(exc).lower():
+        return "Ollama is not reachable"
+    return str(exc)
 
 
 # ── Webhook URL validation ──────────────────────────────────────────────────
@@ -271,6 +288,40 @@ async def run_ssrf_scan(req: SSRFScanRequest, background_tasks: BackgroundTasks)
         return {"status": "success", "message": f"SSRF scan completed for {req.target_url}"}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/api/ai/health")
+async def ollama_health() -> Dict[str, Any]:
+    """Report optional Ollama availability without affecting AntiFine startup."""
+    config = OllamaConfig.from_env()
+    response: Dict[str, Any] = {
+        "enabled": config.enabled,
+        "available": False,
+        "provider": "ollama",
+        "model": config.model,
+    }
+    if not config.enabled:
+        return response
+    try:
+        await OllamaService(config).health_check()
+        response["available"] = True
+    except OllamaError as exc:
+        response["error"] = _ollama_error_message(exc)
+    return response
+
+
+@app.post("/api/ai/test")
+async def ollama_test(req: AITestRequest) -> Dict[str, str]:
+    """Send one explicit, isolated prompt to the configured local model."""
+    if not req.prompt.strip():
+        raise HTTPException(status_code=422, detail="Prompt must not be empty")
+    try:
+        response = await OllamaService().generate(req.prompt)
+        return {"response": response}
+    except OllamaDisabledError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except OllamaError as exc:
+        raise HTTPException(status_code=502, detail=_ollama_error_message(exc)) from exc
 
 
 @app.post("/api/scan/iac")
