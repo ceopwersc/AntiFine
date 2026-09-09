@@ -15,7 +15,7 @@ This skill provides a deep dive into the AntiFine IaC scanning tool. Use this co
 - **Compliance Mapper**: `src/scanners/compliance_mapper.py` translates findings into rich structures with frameworks (e.g., CIS Benchmarks, NIST SP 800-190) and remediation guidance.
 - **Reporting**: `src/reporting/sarif_exporter.py` translates findings to OASIS SARIF v2.1.0 JSON format for CI/CD ingestion, injecting compliance framework and remediation metadata natively.
 - **Remediation**: `src/scanners/remediation.py` applies a small allowlist of deterministic Dockerfile, Kubernetes, and Terraform fixes after creating a `.bak` backup, then the API re-scans the target.
-- **Optional Ollama**: `src/services/ollama_service.py` is a lazy, environment-configured client for local Ollama text generation. It is exposed only through `/api/ai/health` and `/api/ai/test`; it is never part of deterministic scanning or remediation.
+- **Optional Ollama**: `src/services/ollama_service.py` is a lazy, environment-configured client for local Ollama text generation. It reads `OLLAMA_ENABLED`, `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, and `OLLAMA_TIMEOUT` with the existing `os.getenv` pattern. It is exposed only through `/api/ai/health` and `/api/ai/test`; it is never part of deterministic scanning or remediation.
 - **Frontend Workspace**: React/Vite application (`frontend/`) heavily utilizing Tailwind CSS (dark-mode cybersecurity aesthetic) and Lucide icons. `Dashboard.tsx` serves as an interactive Remediation Workspace with real-time KPI filtering, on-demand scanning, and a slide-over code remediation drawer.
 
 ## 2. CI/CD & Gating (`src/cli/gate.py`)

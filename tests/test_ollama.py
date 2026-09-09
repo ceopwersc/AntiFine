@@ -94,6 +94,22 @@ def test_ai_health_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     assert response.json()["enabled"] is False
 
 
+def test_configuration_reads_ollama_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OLLAMA_ENABLED", "true")
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama.local:11434/")
+    monkeypatch.setenv("OLLAMA_MODEL", "custom-model")
+    monkeypatch.setenv("OLLAMA_TIMEOUT", "12")
+
+    config = OllamaConfig.from_env()
+
+    assert config.enabled is True
+    assert config.base_url == "http://ollama.local:11434"
+    assert config.model == "custom-model"
+    assert config.timeout == 12.0
+
+
 def test_ai_test_rejects_empty_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OLLAMA_ENABLED", "true")
     response = TestClient(app).post("/api/ai/test", json={"prompt": "  "})

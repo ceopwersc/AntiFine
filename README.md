@@ -107,6 +107,18 @@ OLLAMA_MODEL=qwen2.5:7b
 OLLAMA_TIMEOUT=30
 ```
 
+AntiFine reads these values from the process environment using its existing
+`os.getenv` configuration pattern. The repository includes `.env.example` as
+a template, but it is not loaded automatically and should not be committed as
+`.env`. On Windows PowerShell, set the values before starting FastAPI:
+
+```powershell
+$env:OLLAMA_ENABLED = "true"
+$env:OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+$env:OLLAMA_MODEL = "qwen2.5:7b"
+$env:OLLAMA_TIMEOUT = "30"
+```
+
 Start Ollama and pull the default model:
 
 ```bash
