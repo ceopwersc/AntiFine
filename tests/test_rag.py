@@ -140,6 +140,19 @@ class RagTests(unittest.TestCase):
         self.assertIn("Security group exposes SSH", prompt)
         self.assertIn("CIS AWS Foundations Benchmark 5.2", prompt)
 
+    def test_context_prompt_enforces_compliance_allowlist(self) -> None:
+        context = AIContext(
+            source="finding",
+            finding=AIFindingContext(
+                rule_id="TF-AWS-004",
+                frameworks=["CIS AWS Foundations Benchmark 5.2"],
+            ),
+        )
+        rendered = build_context("What is the compliance impact?", [], structured_context=context)
+        self.assertIn("Compliance mappings are an allowlist", rendered)
+        self.assertIn("do not add or infer another framework", rendered)
+        self.assertIn("general guidance", rendered)
+
     def test_scan_compliance_and_remediation_context_are_rendered(self) -> None:
         contexts = [
             AIContext(source="scan", scan=AIScanContext(target_path="infra", scan_type="iac")),

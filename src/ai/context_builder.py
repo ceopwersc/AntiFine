@@ -137,7 +137,11 @@ def build_context(
         "RETRIEVED ANTIFINE KNOWLEDGE (reference context)\n"
         f"{sources}\n\n"
         "Use only supplied AntiFine facts for AntiFine-specific claims. "
-        "If the retrieved context does not answer the question, say so."
+        "Compliance mappings are an allowlist: do not add or infer another "
+        "framework or control. If the retrieved context does not answer the "
+        "question, say: \"I don't have enough AntiFine-specific information "
+        "to determine that.\" General security guidance must be labelled "
+        "general guidance."
     )
     return context[:MAX_CONTEXT]
 
