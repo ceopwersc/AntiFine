@@ -44,7 +44,7 @@ import {
   Terminal,
   X,
 } from 'lucide-react';
-import { askAntiFine, explainFinding, explainRemediation, fetchAIHealth, generateReport, remediateFinding, runScan, type AskContext, type AskResponse, type FindingExplanation, type RemediationExplanation } from './api';
+import { askAntiFine, explainFinding, explainRemediation, fetchAIHealth, generateReport, remediateFinding, runScan, type AskContext, type AskMessage, type AskResponse, type FindingExplanation, type RemediationExplanation } from './api';
 import { Area, AreaChart, ResponsiveContainer, Tooltip } from 'recharts';
 
 type Severity = 'Critical' | 'High' | 'Medium' | 'Low';
@@ -364,7 +364,7 @@ function renderExplanation(explanation: string) {
   });
 }
 
-type AssistantMessage = { role: 'user' | 'assistant'; content: string; sources?: AskResponse['sources'] };
+type AssistantMessage = AskMessage & { sources?: AskResponse['sources'] };
 
 function renderMarkdown(markdown: string) {
   const renderInline = (value: string) => value.split(/(`[^`]+`)/g).map((part, partIndex) => part.startsWith('`') && part.endsWith('`')
@@ -404,10 +404,12 @@ function AskAntiFinePage({
   context,
   initialQuestion,
   onClearContext,
+  onNewChat,
 }: {
   context?: AskContext;
   initialQuestion?: string;
   onClearContext: () => void;
+  onNewChat: () => void;
 }) {
   const [health, setHealth] = useState<Awaited<ReturnType<typeof fetchAIHealth>> | null>(null);
   const [messages, setMessages] = useState<AssistantMessage[]>([]);
@@ -449,10 +451,11 @@ function AskAntiFinePage({
     if (!trimmed || loading) return;
     setQuestion('');
     setError('');
+    const previousMessages = messages.map(({ role, content }) => ({ role, content })).slice(-10);
     setMessages((current) => [...current, { role: 'user', content: trimmed }]);
     setLoading(true);
     try {
-      const response = await askAntiFine(trimmed, context);
+      const response = await askAntiFine(trimmed, context, previousMessages);
       if (!response.answer?.trim()) throw new Error('The assistant returned an empty response.');
       setMessages((current) => [...current, { role: 'assistant', content: response.answer, sources: response.sources }]);
     } catch (requestError: any) {
@@ -465,7 +468,7 @@ function AskAntiFinePage({
     const lastQuestion = [...messages].reverse().find((message) => message.role === 'user')?.content;
     if (lastQuestion) void sendQuestion(lastQuestion);
   };
-  const newChat = () => { setMessages([]); setError(''); setQuestion(''); };
+  const newChat = () => { setMessages([]); setError(''); setQuestion(''); onNewChat(); };
   const copyAnswer = async (content: string) => {
     await navigator.clipboard?.writeText(content);
     setCopied(true);
@@ -476,7 +479,7 @@ function AskAntiFinePage({
   return <div className="content-stack assistant-page">
     <div className="assistant-header">
       <div><div className="eyebrow">Local intelligence</div><h1>Ask AntiFine</h1><p>Local security intelligence for your infrastructure.</p></div>
-      <div className="assistant-actions"><button className="button button-secondary" onClick={newChat}><MessageSquareText size={14} />New chat</button><button className="button button-secondary" onClick={newChat} disabled={!messages.length}><Trash2 size={14} />Clear conversation</button></div>
+      <div className="assistant-actions"><button className="button button-secondary" onClick={newChat}><MessageSquareText size={14} />New chat</button><button className="button button-secondary" onClick={() => { setMessages([]); setError(''); }} disabled={!messages.length}><Trash2 size={14} />Clear conversation</button></div>
     </div>
     <div className={`assistant-status ${available ? 'assistant-online' : 'assistant-offline'}`}>
       {available ? <Bot size={17} /> : <WifiOff size={17} />}
@@ -639,5 +642,5 @@ export default function App() {
   };
   const completeScan = (nextFindings: Finding[]) => { setFindings(nextFindings); setPage('findings'); };
   const markApplied = () => { if (remediationFinding) setFindings((current) => current.map((item) => item.id === remediationFinding.id ? { ...item, status: 'Fixed' } : item)); };
-  return <AppShell page={page} setPage={(nextPage) => { if (nextPage !== 'ai') setAssistantContext(undefined); setPage(nextPage); }}><AnimatePresence mode="wait"><motion.div key={page} className="page-transition" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.16 }}>{page === 'overview' && <Overview findings={findings} onNavigate={setPage} onSelect={selectFinding} />}{page === 'scan' && <ScanWorkspace onComplete={completeScan} target={target} setTarget={setTarget} />}{page === 'findings' && <FindingsPage findings={findings} onSelect={selectFinding} />}{page === 'compliance' && <CompliancePage />}{page === 'secrets' && <SecretsPage />}{page === 'history' && <HistoryPage />}{page === 'reports' && <ReportsPage />}{page === 'ai' && <AskAntiFinePage context={assistantContext} initialQuestion={assistantQuestion} onClearContext={() => setAssistantContext(undefined)} />}</motion.div></AnimatePresence><AnimatePresence>{selectedFinding && !remediationFinding && <FindingDrawer finding={selectedFinding} onClose={() => setSelectedFinding(null)} onRemediate={() => setRemediationFinding(selectedFinding)} onAsk={() => askAboutFinding(selectedFinding)} explanationCache={explanationCache} onExplanation={(id, result) => setExplanationCache((current) => ({ ...current, [id]: result }))} />}{remediationFinding && <RemediationModal finding={remediationFinding} onClose={() => setRemediationFinding(null)} onApplied={markApplied} />}</AnimatePresence></AppShell>;
+  return <AppShell page={page} setPage={(nextPage) => { if (nextPage !== 'ai') setAssistantContext(undefined); setPage(nextPage); }}><AnimatePresence mode="wait"><motion.div key={page} className="page-transition" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.16 }}>{page === 'overview' && <Overview findings={findings} onNavigate={setPage} onSelect={selectFinding} />}{page === 'scan' && <ScanWorkspace onComplete={completeScan} target={target} setTarget={setTarget} />}{page === 'findings' && <FindingsPage findings={findings} onSelect={selectFinding} />}{page === 'compliance' && <CompliancePage />}{page === 'secrets' && <SecretsPage />}{page === 'history' && <HistoryPage />}{page === 'reports' && <ReportsPage />}{page === 'ai' && <AskAntiFinePage context={assistantContext} initialQuestion={assistantQuestion} onClearContext={() => setAssistantContext(undefined)} onNewChat={() => { setAssistantContext(undefined); setAssistantQuestion(''); }} />}</motion.div></AnimatePresence><AnimatePresence>{selectedFinding && !remediationFinding && <FindingDrawer finding={selectedFinding} onClose={() => setSelectedFinding(null)} onRemediate={() => setRemediationFinding(selectedFinding)} onAsk={() => askAboutFinding(selectedFinding)} explanationCache={explanationCache} onExplanation={(id, result) => setExplanationCache((current) => ({ ...current, [id]: result }))} />}{remediationFinding && <RemediationModal finding={remediationFinding} onClose={() => setRemediationFinding(null)} onApplied={markApplied} />}</AnimatePresence></AppShell>;
 }

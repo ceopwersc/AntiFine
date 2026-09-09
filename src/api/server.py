@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import uvicorn
 
 # Ensure the src directory is in the path
@@ -36,7 +36,7 @@ from src.services.ollama_service import (
     OllamaService,
 )
 from src.models.finding import Finding
-from src.models.ai_context import AIContext
+from src.models.ai_context import AIContext, AIMessage
 from src.services.ai_explanation import (
     finding_id,
 )
@@ -105,6 +105,7 @@ class AIAskRequest(BaseModel):
     # ``str`` keeps older local clients working while new clients get a
     # validated, structured context contract.
     context: AIContext | str | None = None
+    messages: list[AIMessage] = Field(default_factory=list, max_length=10)
 
 class RemediationExplanationRequest(BaseModel):
     finding: Finding
@@ -414,6 +415,7 @@ async def ask_ai(req: AIAskRequest) -> Dict[str, Any]:
                 req.question,
                 retrieved,
                 structured_context=req.context,
+                messages=req.messages,
             ),
             system_prompt=GENERAL_SYSTEM_PROMPT,
         )

@@ -25,7 +25,7 @@ _SECRET_PATTERNS = (
     (
         re.compile(
             r"(?i)\b(?:password|passwd|secret|token|api[_-]?key|access[_-]?key)"
-            r"(\s*[:=]\s*)([\"']?)[^\s\"']+\2"
+            r"(\s*[:=]\s*)([\"']?)(?:\[[^\]]+\]|[^\s\"']+)\2"
         ),
         r"\1[REDACTED CREDENTIAL]",
     ),

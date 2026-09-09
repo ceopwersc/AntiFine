@@ -52,11 +52,16 @@ export interface AskContext {
   code_context?: string;
 }
 
+export interface AskMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 export const fetchAIHealth = async (): Promise<AIHealth> => {
   return (await apiClient.get<AIHealth>('/ai/health')).data;
 };
 
-export const askAntiFine = async (question: string, context?: AskContext): Promise<AskResponse> => {
+export const askAntiFine = async (question: string, context?: AskContext, messages: AskMessage[] = []): Promise<AskResponse> => {
   const response = await apiClient.post<AskResponse>('/ai/ask', {
     question,
     context: context ? {
@@ -70,6 +75,7 @@ export const askAntiFine = async (question: string, context?: AskContext): Promi
         frameworks: context.framework ? [context.framework] : [],
       },
     } : undefined,
+    messages: messages.slice(-10).map(({ role, content }) => ({ role, content: content.slice(0, 1200) })),
   });
   return response.data;
 };

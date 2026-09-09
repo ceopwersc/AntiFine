@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from src.ai.retriever import KnowledgeChunk
 from src.models.finding import Finding
-from src.models.ai_context import AIContext
+from src.models.ai_context import AIContext, AIMessage
 from src.services.ai_explanation import sanitize_text
 
 MAX_CONTEXT = 12000
+MAX_MESSAGES = 10
+MAX_MESSAGE_CHARS = 1200
 
 
 def _value(value: object, limit: int = 1200) -> str:
@@ -110,6 +112,7 @@ def build_context(
     finding: Finding | None = None,
     code_context: str | None = None,
     structured_context: AIContext | str | None = None,
+    messages: list[AIMessage] | None = None,
 ) -> str:
     """Separate authoritative AntiFine data from general retrieved context."""
     sources = "\n\n".join(
@@ -127,13 +130,20 @@ def build_context(
             f"Remediation: {sanitize_text(finding.remediation)}"
         )
     context_source, supplied_context = format_ai_context(structured_context)
+    history = messages[-MAX_MESSAGES:] if messages else []
+    history_text = "\n".join(
+        f"{message.role.upper()}: {sanitize_text(message.content, limit=MAX_MESSAGE_CHARS)}"
+        for message in history
+    ) or "No previous conversation."
     context = (
         "AUTHORITATIVE ANTIFINE DATA\n"
-        f"Question: {sanitize_text(question, limit=4000)}\n"
         f"Finding:\n{finding_text}\n"
         f"Sanitized code context:\n{sanitize_text(code_context or '', limit=4000) or 'None supplied'}\n\n"
         f"SUPPLIED STRUCTURED CONTEXT (source: {context_source})\n"
         f"{supplied_context}\n\n"
+        "BOUNDED CONVERSATION HISTORY (prior turns; not authoritative)\n"
+        f"{history_text}\n\n"
+        f"CURRENT QUESTION\n{sanitize_text(question, limit=4000)}\n\n"
         "RETRIEVED ANTIFINE KNOWLEDGE (reference context)\n"
         f"{sources}\n\n"
         "Use only supplied AntiFine facts for AntiFine-specific claims. "

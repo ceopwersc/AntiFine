@@ -15,6 +15,12 @@ AIContextSource = Literal[
     "remediation",
     "general",
 ]
+AIMessageRole = Literal["user", "assistant"]
+
+
+class AIMessage(BaseModel):
+    role: AIMessageRole
+    content: str = Field(min_length=1, max_length=4000)
 
 
 class AIFindingContext(BaseModel):
