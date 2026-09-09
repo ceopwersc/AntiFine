@@ -36,6 +36,7 @@ from src.services.ollama_service import (
     OllamaService,
 )
 from src.models.finding import Finding
+from src.models.ai_context import AIContext
 from src.services.ai_explanation import (
     finding_id,
 )
@@ -101,7 +102,9 @@ class FindingExplanationRequest(BaseModel):
 
 class AIAskRequest(BaseModel):
     question: str
-    context: str | None = None
+    # ``str`` keeps older local clients working while new clients get a
+    # validated, structured context contract.
+    context: AIContext | str | None = None
 
 class RemediationExplanationRequest(BaseModel):
     finding: Finding
@@ -398,11 +401,20 @@ async def ask_ai(req: AIAskRequest) -> Dict[str, Any]:
     """Answer a question using retrieved local AntiFine knowledge."""
     if not req.question.strip():
         raise HTTPException(status_code=422, detail="Question must not be empty")
-    retrieved = retrieve(req.question, top_k=5)
+    context_text = build_context(
+        req.question,
+        [],
+        structured_context=req.context,
+    )
+    retrieved = retrieve(f"{req.question}\n{context_text}", top_k=5)
     try:
         service = OllamaService()
         answer = await service.generate(
-            build_context(req.question, retrieved, code_context=req.context),
+            build_context(
+                req.question,
+                retrieved,
+                structured_context=req.context,
+            ),
             system_prompt=GENERAL_SYSTEM_PROMPT,
         )
         return {

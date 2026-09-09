@@ -59,7 +59,17 @@ export const fetchAIHealth = async (): Promise<AIHealth> => {
 export const askAntiFine = async (question: string, context?: AskContext): Promise<AskResponse> => {
   const response = await apiClient.post<AskResponse>('/ai/ask', {
     question,
-    context: context ? JSON.stringify(context) : undefined,
+    context: context ? {
+      source: 'finding',
+      finding: {
+        rule_id: context.rule_id,
+        title: context.title,
+        severity: context.severity,
+        technology: context.technology,
+        file: context.finding_id,
+        frameworks: context.framework ? [context.framework] : [],
+      },
+    } : undefined,
   });
   return response.data;
 };

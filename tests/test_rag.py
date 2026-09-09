@@ -12,6 +12,13 @@ from fastapi import HTTPException
 from src.ai.context_builder import build_context
 from src.ai.retriever import Retriever
 from src.api.server import AIAskRequest, ask_ai
+from src.models.ai_context import (
+    AIComplianceContext,
+    AIContext,
+    AIFindingContext,
+    AIRemediationContext,
+    AIScanContext,
+)
 from src.services.ollama_service import OllamaDisabledError
 
 
@@ -78,6 +85,89 @@ class RagTests(unittest.TestCase):
         prompt = service.generate.await_args.args[0]
         self.assertIn("AUTHORITATIVE ANTIFINE DATA", prompt)
         self.assertIn("secrets.entropy", prompt)
+
+    def test_general_question_has_no_context(self) -> None:
+        request = AIAskRequest(question="How does AntiFine work?")
+        self.assertIsNone(request.context)
+
+    def test_finding_context_is_structured_and_sanitized(self) -> None:
+        context = AIContext(
+            source="finding",
+            finding=AIFindingContext(
+                rule_id="TF-AWS-004",
+                title="Exposes SSH",
+                severity="CRITICAL",
+                frameworks=["CIS AWS Foundations Benchmark 5.2"],
+            ),
+        )
+        rendered = build_context("Why is this critical?", [], structured_context=context)
+        self.assertIn("Source: finding", rendered)
+        self.assertIn("Rule ID: TF-AWS-004", rendered)
+
+        secret_context = context.model_copy(
+            update={"finding": AIFindingContext(title="token=ghp_123456789012345678901234567890123456")}
+        )
+        rendered_secret = build_context("Explain", [], structured_context=secret_context)
+        self.assertNotIn("ghp_123456789012345678901234567890123456", rendered_secret)
+        self.assertIn("REDACTED", rendered_secret)
+
+    def test_ask_endpoint_accepts_structured_finding_context(self) -> None:
+        service = type("Service", (), {
+            "config": type("Config", (), {"model": "qwen2.5:7b"})(),
+            "generate": AsyncMock(return_value="The deterministic rule treats this as critical."),
+        })()
+        request = AIAskRequest(
+            question="Why is this finding critical?",
+            context=AIContext(
+                source="finding",
+                finding=AIFindingContext(
+                    rule_id="TF-AWS-004",
+                    title="Security group exposes SSH to the internet",
+                    severity="CRITICAL",
+                    technology="terraform",
+                    file="main.tf",
+                    line=42,
+                    frameworks=["CIS AWS Foundations Benchmark 5.2"],
+                    status="open",
+                ),
+            ),
+        )
+        with patch("src.api.server.OllamaService", return_value=service):
+            response = asyncio.run(ask_ai(request))
+        self.assertEqual(response["provider"], "ollama")
+        prompt = service.generate.await_args.args[0]
+        self.assertIn("Rule ID: TF-AWS-004", prompt)
+        self.assertIn("Security group exposes SSH", prompt)
+        self.assertIn("CIS AWS Foundations Benchmark 5.2", prompt)
+
+    def test_scan_compliance_and_remediation_context_are_rendered(self) -> None:
+        contexts = [
+            AIContext(source="scan", scan=AIScanContext(target_path="infra", scan_type="iac")),
+            AIContext(source="compliance", compliance=AIComplianceContext(
+                framework="CIS", controls=["5.2"], status="failing",
+            )),
+            AIContext(source="remediation", remediation=AIRemediationContext(
+                rule_id="TF-AWS-004", diff="- public = true\n+ public = false",
+            )),
+        ]
+        rendered = [build_context("Explain", [], structured_context=context) for context in contexts]
+        self.assertIn("Target path: infra", rendered[0])
+        self.assertIn("Framework: CIS", rendered[1])
+        self.assertIn("Rule ID: TF-AWS-004", rendered[2])
+
+    def test_invalid_context_source_is_rejected(self) -> None:
+        with self.assertRaises(Exception):
+            AIAskRequest.model_validate({
+                "question": "Explain",
+                "context": {"source": "unknown"},
+            })
+
+    def test_malformed_context_is_rejected(self) -> None:
+        with self.assertRaises(Exception):
+            AIAskRequest.model_validate({
+                "question": "Explain",
+                "context": {"source": "finding", "finding": {"line": "not-a-line"}},
+            })
 
 
 if __name__ == "__main__":

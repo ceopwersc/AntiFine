@@ -192,6 +192,32 @@ Invoke-RestMethod -Uri http://127.0.0.1:8000/api/ai/ask `
   -Method Post -ContentType "application/json" -Body $body
 ```
 
+Structured context is also supported for finding-aware questions. The
+`source` must be one of `finding`, `scan`, `dashboard`, `compliance`,
+`remediation`, or `general`:
+
+```json
+{
+  "question": "Why is this finding critical?",
+  "context": {
+    "source": "finding",
+    "finding": {
+      "rule_id": "TF-AWS-004",
+      "title": "Security group exposes SSH to the internet",
+      "severity": "CRITICAL",
+      "technology": "terraform",
+      "file": "main.tf",
+      "line": 42,
+      "frameworks": ["CIS AWS Foundations Benchmark 5.2"],
+      "status": "open"
+    }
+  }
+}
+```
+
+Older clients may continue sending a plain string in `context`; it is
+sanitized and treated as general context.
+
 Rebuild the local index explicitly after changing the knowledge documents:
 
 ```powershell
