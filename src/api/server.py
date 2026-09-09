@@ -37,11 +37,12 @@ from src.services.ollama_service import (
 )
 from src.models.finding import Finding
 from src.services.ai_explanation import (
-    SYSTEM_PROMPT,
-    build_explanation_prompt,
     finding_id,
 )
 from src.ai.knowledge_service import find_rule_for_finding
+from src.ai.context_builder import build_context, source_metadata
+from src.ai.prompts import EXPLANATION_SYSTEM_PROMPT, GENERAL_SYSTEM_PROMPT
+from src.ai.retriever import retrieve
 
 
 # ── Initialization ──────────────────────────────────────────────────────────
@@ -93,6 +94,9 @@ class AITestRequest(BaseModel):
 class FindingExplanationRequest(BaseModel):
     finding: Finding
     code_context: str | None = None
+
+class AIAskRequest(BaseModel):
+    question: str
 
 
 # ── Severity rank helper ────────────────────────────────────────────────────
@@ -340,13 +344,27 @@ async def explain_finding(req: FindingExplanationRequest) -> Dict[str, Any]:
     """Explain an existing deterministic finding using the local model."""
     service = OllamaService()
     try:
+        matched_rule = find_rule_for_finding(req.finding)
+        query = " ".join(
+            filter(
+                None,
+                [
+                    matched_rule.rule_id if matched_rule else "",
+                    req.finding.rule_name,
+                    req.finding.severity,
+                    *req.finding.frameworks,
+                ],
+            )
+        )
+        retrieved = retrieve(query, top_k=5)
         explanation = await service.generate(
-            build_explanation_prompt(
+            build_context(
+                "Explain this existing AntiFine finding.",
+                retrieved,
                 req.finding,
                 req.code_context,
-                find_rule_for_finding(req.finding),
             ),
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=EXPLANATION_SYSTEM_PROMPT,
         )
         return {
             "finding_id": finding_id(req.finding),
@@ -354,6 +372,31 @@ async def explain_finding(req: FindingExplanationRequest) -> Dict[str, Any]:
             "provider": "ollama",
             "explanation": explanation,
             "generated_locally": True,
+            "sources": source_metadata(retrieved),
+        }
+    except OllamaDisabledError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except OllamaError as exc:
+        raise HTTPException(status_code=502, detail=_ollama_error_message(exc)) from exc
+
+
+@app.post("/api/ai/ask")
+async def ask_ai(req: AIAskRequest) -> Dict[str, Any]:
+    """Answer a question using retrieved local AntiFine knowledge."""
+    if not req.question.strip():
+        raise HTTPException(status_code=422, detail="Question must not be empty")
+    retrieved = retrieve(req.question, top_k=5)
+    try:
+        service = OllamaService()
+        answer = await service.generate(
+            build_context(req.question, retrieved),
+            system_prompt=GENERAL_SYSTEM_PROMPT,
+        )
+        return {
+            "answer": answer,
+            "model": service.config.model,
+            "provider": "ollama",
+            "sources": source_metadata(retrieved),
         }
     except OllamaDisabledError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

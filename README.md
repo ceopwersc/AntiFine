@@ -176,6 +176,27 @@ The explanation prompt also receives deterministic context from
 `docs/ai/` for the scan workflow, Terraform, Docker, Kubernetes, secrets,
 compliance, and remediation behavior. This is a local rule catalog only; it
 does not add embeddings, a vector database, RAG, or autonomous behavior.
+
+### Local retrieval-assisted AI
+AntiFine now retrieves relevant local rules and `docs/ai/` documentation before
+calling Ollama. Retrieval uses a cached, rebuildable lexical index; no
+embedding model, cloud API, hosted vector database, or internet connection is
+required. The index is generated at `.antifine/knowledge_index.json` and is
+ignored by Git.
+
+Ask a general AntiFine question:
+
+```powershell
+$body = @{ question = "How does AntiFine detect high entropy secrets?" } | ConvertTo-Json
+Invoke-RestMethod -Uri http://127.0.0.1:8000/api/ai/ask `
+  -Method Post -ContentType "application/json" -Body $body
+```
+
+Rebuild the local index explicitly after changing the knowledge documents:
+
+```powershell
+python -m src.cli.ai rebuild-index
+```
 Deterministic fixes require a finding from a scan of a file that exists under
 the backend project root. Preview/demo findings in the frontend may reference
 example paths that are not present locally; AntiFine reports that remediation
