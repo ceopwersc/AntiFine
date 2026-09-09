@@ -169,6 +169,11 @@ Local AI**. The explanation is cached for the current frontend session and is
 shown below the deterministic finding details; retry and regenerate actions do
 not alter the finding or its remediation state.
 
+Deterministic fixes require a finding from a scan of a file that exists under
+the backend project root. Preview/demo findings in the frontend may reference
+example paths that are not present locally; AntiFine reports that remediation
+error and does not mark the finding as fixed.
+
 ### GUI Testing
 To run the Desktop CustomTkinter interface (Optional):
 ```bash
