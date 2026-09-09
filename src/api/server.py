@@ -41,6 +41,7 @@ from src.services.ai_explanation import (
     build_explanation_prompt,
     finding_id,
 )
+from src.ai.knowledge_service import find_rule_for_finding
 
 
 # ── Initialization ──────────────────────────────────────────────────────────
@@ -340,7 +341,11 @@ async def explain_finding(req: FindingExplanationRequest) -> Dict[str, Any]:
     service = OllamaService()
     try:
         explanation = await service.generate(
-            build_explanation_prompt(req.finding, req.code_context),
+            build_explanation_prompt(
+                req.finding,
+                req.code_context,
+                find_rule_for_finding(req.finding),
+            ),
             system_prompt=SYSTEM_PROMPT,
         )
         return {
