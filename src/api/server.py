@@ -97,6 +97,7 @@ class FindingExplanationRequest(BaseModel):
 
 class AIAskRequest(BaseModel):
     question: str
+    context: str | None = None
 
 
 # ── Severity rank helper ────────────────────────────────────────────────────
@@ -389,7 +390,7 @@ async def ask_ai(req: AIAskRequest) -> Dict[str, Any]:
     try:
         service = OllamaService()
         answer = await service.generate(
-            build_context(req.question, retrieved),
+            build_context(req.question, retrieved, code_context=req.context),
             system_prompt=GENERAL_SYSTEM_PROMPT,
         )
         return {

@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   Activity,
@@ -6,6 +6,8 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   Bell,
+  BookOpen,
+  Bot,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -24,6 +26,7 @@ import {
   KeyRound,
   LayoutDashboard,
   Menu,
+  MessageSquareText,
   MoreHorizontal,
   Play,
   Radar,
@@ -35,14 +38,17 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
+  Send,
+  Trash2,
+  WifiOff,
   Terminal,
   X,
 } from 'lucide-react';
-import { explainFinding, generateReport, remediateFinding, runScan, type FindingExplanation } from './api';
+import { askAntiFine, explainFinding, fetchAIHealth, generateReport, remediateFinding, runScan, type AskContext, type AskResponse, type FindingExplanation } from './api';
 import { Area, AreaChart, ResponsiveContainer, Tooltip } from 'recharts';
 
 type Severity = 'Critical' | 'High' | 'Medium' | 'Low';
-type Page = 'overview' | 'scan' | 'findings' | 'compliance' | 'secrets' | 'history' | 'reports';
+type Page = 'overview' | 'scan' | 'findings' | 'compliance' | 'secrets' | 'history' | 'reports' | 'ai';
 
 interface Finding {
   id: string;
@@ -174,6 +180,12 @@ const navGroups = [
     items: [
       { id: 'history' as Page, label: 'Scan history', icon: Clock3 },
       { id: 'reports' as Page, label: 'Reports', icon: FileText },
+    ],
+  },
+  {
+    label: 'Intelligence',
+    items: [
+      { id: 'ai' as Page, label: 'Ask AntiFine', icon: MessageSquareText },
     ],
   },
 ];
@@ -352,16 +364,151 @@ function renderExplanation(explanation: string) {
   });
 }
 
+type AssistantMessage = { role: 'user' | 'assistant'; content: string; sources?: AskResponse['sources'] };
+
+function renderMarkdown(markdown: string) {
+  const renderInline = (value: string) => value.split(/(`[^`]+`)/g).map((part, partIndex) => part.startsWith('`') && part.endsWith('`')
+    ? <code key={partIndex}>{part.slice(1, -1)}</code>
+    : part);
+  const lines = markdown.split(/\r?\n/);
+  const nodes: ReactNode[] = [];
+  let inCode = false;
+  let codeLines: string[] = [];
+  lines.forEach((line, index) => {
+    if (line.trim().startsWith('```')) {
+      if (inCode) {
+        nodes.push(<pre className="assistant-code" key={`code-${index}`}><code>{codeLines.join('\n')}</code></pre>);
+        codeLines = [];
+      }
+      inCode = !inCode;
+      return;
+    }
+    if (inCode) {
+      codeLines.push(line);
+      return;
+    }
+    const content = line.replace(/^\s*[-*]\s/, '');
+    if (!line.trim()) return;
+    if (/^#{1,3}\s/.test(line)) {
+      nodes.push(<h4 key={index}>{line.replace(/^#{1,3}\s/, '')}</h4>);
+    } else if (/^\s*[-*]\s/.test(line)) {
+      nodes.push(<li key={index}>{renderInline(content)}</li>);
+    } else {
+      nodes.push(<p key={index}>{renderInline(content)}</p>);
+    }
+  });
+  return nodes;
+}
+
+function AskAntiFinePage({
+  context,
+  initialQuestion,
+  onClearContext,
+}: {
+  context?: AskContext;
+  initialQuestion?: string;
+  onClearContext: () => void;
+}) {
+  const [health, setHealth] = useState<Awaited<ReturnType<typeof fetchAIHealth>> | null>(null);
+  const [messages, setMessages] = useState<AssistantMessage[]>([]);
+  const [question, setQuestion] = useState(initialQuestion ?? '');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [copied, setCopied] = useState(false);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const suggestions = [
+    'How does AntiFine detect high-entropy secrets?',
+    'Why is TF-AWS-004 critical?',
+    'Which CIS controls are currently failing?',
+    'How does deterministic remediation work?',
+    'What does PSS Restricted require?',
+  ];
+
+  const checkHealth = async () => {
+    try {
+      setHealth(await fetchAIHealth());
+    } catch {
+      setHealth({ enabled: true, available: false, provider: 'ollama', model: 'qwen2.5:7b', error: 'Backend unavailable' });
+    }
+  };
+  useEffect(() => { void checkHealth(); }, []);
+  useEffect(() => {
+    const shortcut = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        composerRef.current?.focus();
+      }
+      if (event.key === 'Escape' && context) onClearContext();
+    };
+    window.addEventListener('keydown', shortcut);
+    return () => window.removeEventListener('keydown', shortcut);
+  }, [context, onClearContext]);
+
+  const sendQuestion = async (value = question) => {
+    const trimmed = value.trim();
+    if (!trimmed || loading) return;
+    setQuestion('');
+    setError('');
+    setMessages((current) => [...current, { role: 'user', content: trimmed }]);
+    setLoading(true);
+    try {
+      const response = await askAntiFine(trimmed, context);
+      if (!response.answer?.trim()) throw new Error('The assistant returned an empty response.');
+      setMessages((current) => [...current, { role: 'assistant', content: response.answer, sources: response.sources }]);
+    } catch (requestError: any) {
+      setError(requestError?.response?.data?.detail || 'Local AI is unavailable.');
+    } finally {
+      setLoading(false);
+    }
+  };
+  const retry = () => {
+    const lastQuestion = [...messages].reverse().find((message) => message.role === 'user')?.content;
+    if (lastQuestion) void sendQuestion(lastQuestion);
+  };
+  const newChat = () => { setMessages([]); setError(''); setQuestion(''); };
+  const copyAnswer = async (content: string) => {
+    await navigator.clipboard?.writeText(content);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
+  };
+  const available = health?.available === true;
+
+  return <div className="content-stack assistant-page">
+    <div className="assistant-header">
+      <div><div className="eyebrow">Local intelligence</div><h1>Ask AntiFine</h1><p>Local security intelligence for your infrastructure.</p></div>
+      <div className="assistant-actions"><button className="button button-secondary" onClick={newChat}><MessageSquareText size={14} />New chat</button><button className="button button-secondary" onClick={newChat} disabled={!messages.length}><Trash2 size={14} />Clear conversation</button></div>
+    </div>
+    <div className={`assistant-status ${available ? 'assistant-online' : 'assistant-offline'}`}>
+      {available ? <Bot size={17} /> : <WifiOff size={17} />}
+      <div><strong>{available ? 'Local AI ready' : health ? 'Ollama unavailable' : 'Checking local AI…'}</strong><span>Answers are generated locally using Ollama and AntiFine’s local knowledge.</span></div>
+      <span className="assistant-model">{health?.provider ?? 'ollama'} · {health?.model ?? 'qwen2.5:7b'}</span>
+      {!available && <button className="text-button" onClick={() => void checkHealth()}>Retry connection</button>}
+    </div>
+    {context && <div className="assistant-context"><div><span>Analyzing</span><strong>{context.rule_id || context.finding_id}</strong></div><SeverityBadge severity={normalizeSeverity(context.severity)} /><code>{context.technology} · {context.finding_id}</code><button className="icon-button small" aria-label="Remove finding context" onClick={onClearContext}><X size={14} /></button></div>}
+    <section className="panel assistant-panel">
+      <div className="assistant-conversation" aria-live="polite">
+        {!messages.length && <div className="assistant-empty"><div className="assistant-empty-icon"><MessageSquareText size={20} /></div><h2>What can I help you investigate?</h2><p>Ask about AntiFine rules, compliance mappings, remediation behavior, or a finding.</p><div className="suggestion-grid">{suggestions.map((suggestion) => <button key={suggestion} onClick={() => void sendQuestion(suggestion)}>{suggestion}<Send size={13} /></button>)}</div></div>}
+        {messages.map((message, index) => <div className={`assistant-message ${message.role}`} key={`${message.role}-${index}`}><div className="message-meta">{message.role === 'user' ? 'You' : 'AntiFine · local assistant'}</div><div className="message-body">{message.role === 'assistant' ? renderMarkdown(message.content) : <p>{message.content}</p>}</div>{message.role === 'assistant' && <>{message.sources?.length ? <div className="source-list"><span className="source-label">Sources</span>{message.sources.map((source) => <div className="source-item" key={`${source.source}-${source.title}`}><BookOpen size={13} /><div><strong>{source.title}</strong><span>{source.source}{source.rule_id ? ` · ${source.rule_id}` : ''}</span></div></div>)}</div> : null}<div className="message-actions"><button className="text-button" onClick={() => void copyAnswer(message.content)}><Copy size={13} />{copied ? 'Copied' : 'Copy answer'}</button><button className="text-button" onClick={retry}><RefreshCw size={13} />Regenerate</button></div></>}</div>)}
+        {loading && <div className="assistant-message assistant"><div className="message-meta">AntiFine · local assistant</div><div className="assistant-loading"><RefreshCw size={14} className="spin" />Analyzing locally…</div></div>}
+        {error && <div className="assistant-error"><strong>Local AI is unavailable.</strong><span>AntiFine’s deterministic security engine remains fully operational.</span><button className="text-button" onClick={retry}>Retry</button></div>}
+      </div>
+      <div className="assistant-composer"><textarea ref={composerRef} value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendQuestion(); } }} placeholder="Ask about AntiFine, a finding, compliance rule, or remediation…" aria-label="Ask AntiFine a question" /><div className="composer-footer"><span><kbd>Enter</kbd> send · <kbd>Shift + Enter</kbd> newline · <kbd>⌘ K</kbd> focus</span><button className="button button-primary" onClick={() => void sendQuestion()} disabled={loading || !question.trim()}>{loading ? <><RefreshCw size={14} className="spin" />Analyzing…</> : <><Send size={14} />Send</>}</button></div></div>
+    </section>
+  </div>;
+}
+
 function FindingDrawer({
   finding,
   onClose,
   onRemediate,
+  onAsk,
   explanationCache,
   onExplanation,
 }: {
   finding: Finding;
   onClose: () => void;
   onRemediate: () => void;
+  onAsk: () => void;
   explanationCache: Record<string, FindingExplanation>;
   onExplanation: (findingId: string, explanation: FindingExplanation) => void;
 }) {
@@ -387,7 +534,7 @@ function FindingDrawer({
       setAIError(detail || 'Local AI unavailable');
     } finally { setLoadingAI(false); }
   };
-  return <><motion.button className="drawer-scrim" onClick={onClose} aria-label="Close finding details" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} /><motion.aside className="detail-drawer" role="dialog" aria-modal="true" aria-label="Finding details" initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: 'spring', damping: 28, stiffness: 260 }}><div className="drawer-header"><div><span className="drawer-eyebrow">Finding {finding.id}</span><h2>{finding.rule_name}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={19} /></button></div><div className="drawer-content"><div className="drawer-badges"><SeverityBadge severity={finding.severity} /><span className={`status-badge ${finding.status.toLowerCase()}`}><span />{finding.status}</span></div><section className="drawer-section"><h3>Why this matters</h3><p>{finding.description}</p></section><section className="drawer-section"><h3>Location</h3><div className="location-card"><FileCode2 size={16} /><code>{finding.file}</code><span>Line {finding.line}</span><button className="icon-button small" aria-label="Copy location" onClick={() => void navigator.clipboard?.writeText(`${finding.file}:${finding.line}`)}><Copy size={14} /></button></div></section><section className="drawer-section"><h3>Compliance mapping</h3><div className="framework-list">{finding.frameworks.map((framework) => <span key={framework} className="framework-pill">{framework}</span>)}</div></section><section className="drawer-section remediation-preview"><div className="section-heading-row"><h3>Recommended remediation</h3><button className="text-button" onClick={copy}>{copied ? <><Check size={13} />Copied</> : <><Copy size={13} />Copy</>}</button></div><p>{finding.remediation}</p><pre>{finding.after}</pre></section><section className="drawer-section ai-explanation" aria-live="polite"><div className="section-heading-row"><div><h3>AI Security Explanation</h3><span className="ai-label">Local AI · Ollama</span></div>{explanation && <button className="text-button" onClick={() => void requestExplanation()} disabled={loadingAI}>{loadingAI ? 'Analyzing locally…' : 'Regenerate'}</button>}</div><p className="ai-disclaimer">AI-generated explanation based on AntiFine's deterministic finding.</p>{aiError ? <div className="ai-error"><strong>Local AI unavailable</strong><span>AntiFine's deterministic security analysis is still available.</span><button className="text-button" onClick={() => void requestExplanation()} disabled={loadingAI}>Retry</button></div> : explanation ? <div className="ai-response"><span className="ai-model">{explanation.model} · generated locally</span>{renderExplanation(explanation.explanation)}</div> : <button className="button button-secondary ai-explain-button" onClick={() => void requestExplanation()} disabled={loadingAI}>{loadingAI ? <><RefreshCw size={15} className="spin" />Analyzing locally…</> : <><Sparkles size={15} />Explain with Local AI</>}</button>}</section></div><div className="drawer-footer"><button className="button button-secondary" onClick={onClose}>Dismiss</button><button className="button button-primary" onClick={onRemediate}><Sparkles size={15} />Review fix</button></div></motion.aside></>;
+  return <><motion.button className="drawer-scrim" onClick={onClose} aria-label="Close finding details" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} /><motion.aside className="detail-drawer" role="dialog" aria-modal="true" aria-label="Finding details" initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: 'spring', damping: 28, stiffness: 260 }}><div className="drawer-header"><div><span className="drawer-eyebrow">Finding {finding.id}</span><h2>{finding.rule_name}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={19} /></button></div><div className="drawer-content"><div className="drawer-badges"><SeverityBadge severity={finding.severity} /><span className={`status-badge ${finding.status.toLowerCase()}`}><span />{finding.status}</span></div><section className="drawer-section"><h3>Why this matters</h3><p>{finding.description}</p></section><section className="drawer-section"><h3>Location</h3><div className="location-card"><FileCode2 size={16} /><code>{finding.file}</code><span>Line {finding.line}</span><button className="icon-button small" aria-label="Copy location" onClick={() => void navigator.clipboard?.writeText(`${finding.file}:${finding.line}`)}><Copy size={14} /></button></div></section><section className="drawer-section"><h3>Compliance mapping</h3><div className="framework-list">{finding.frameworks.map((framework) => <span key={framework} className="framework-pill">{framework}</span>)}</div></section><section className="drawer-section remediation-preview"><div className="section-heading-row"><h3>Recommended remediation</h3><button className="text-button" onClick={copy}>{copied ? <><Check size={13} />Copied</> : <><Copy size={13} />Copy</>}</button></div><p>{finding.remediation}</p><pre>{finding.after}</pre></section><section className="drawer-section ai-explanation" aria-live="polite"><div className="section-heading-row"><div><h3>AI Security Explanation</h3><span className="ai-label">Local AI · Ollama</span></div>{explanation && <button className="text-button" onClick={() => void requestExplanation()} disabled={loadingAI}>{loadingAI ? 'Analyzing locally…' : 'Regenerate'}</button>}</div><p className="ai-disclaimer">AI-generated explanation based on AntiFine's deterministic finding.</p>{aiError ? <div className="ai-error"><strong>Local AI unavailable</strong><span>AntiFine's deterministic security analysis is still available.</span><button className="text-button" onClick={() => void requestExplanation()} disabled={loadingAI}>Retry</button></div> : explanation ? <div className="ai-response"><span className="ai-model">{explanation.model} · generated locally</span>{renderExplanation(explanation.explanation)}</div> : <button className="button button-secondary ai-explain-button" onClick={() => void requestExplanation()} disabled={loadingAI}>{loadingAI ? <><RefreshCw size={15} className="spin" />Analyzing locally…</> : <><Sparkles size={15} />Explain with Local AI</>}</button>}<button className="button button-secondary ai-ask-button" onClick={onAsk}><MessageSquareText size={14} />Ask AntiFine about this</button></section></div><div className="drawer-footer"><button className="button button-secondary" onClick={onClose}>Dismiss</button><button className="button button-primary" onClick={onRemediate}><Sparkles size={15} />Review fix</button></div></motion.aside></>;
 }
 
 function RemediationModal({ finding, onClose, onApplied }: { finding: Finding; onClose: () => void; onApplied: () => void }) {
@@ -439,9 +586,25 @@ export default function App() {
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
   const [remediationFinding, setRemediationFinding] = useState<Finding | null>(null);
   const [explanationCache, setExplanationCache] = useState<Record<string, FindingExplanation>>({});
+  const [assistantContext, setAssistantContext] = useState<AskContext>();
+  const [assistantQuestion, setAssistantQuestion] = useState('');
   const [target, setTarget] = useState('infra/production.tf');
   const selectFinding = (finding: Finding) => setSelectedFinding(finding);
+  const askAboutFinding = (finding: Finding) => {
+    setAssistantContext({
+      finding_id: finding.id,
+      rule_id: finding.id,
+      title: finding.rule_name,
+      severity: finding.severity,
+      technology: finding.file.endsWith('.tf') ? 'terraform' : finding.file.endsWith('.yaml') || finding.file.endsWith('.yml') ? 'kubernetes' : 'docker',
+      framework: finding.framework,
+      code_context: finding.before,
+    });
+    setAssistantQuestion('Explain this finding and why AntiFine classified it this way.');
+    setSelectedFinding(null);
+    setPage('ai');
+  };
   const completeScan = (nextFindings: Finding[]) => { setFindings(nextFindings); setPage('findings'); };
   const markApplied = () => { if (remediationFinding) setFindings((current) => current.map((item) => item.id === remediationFinding.id ? { ...item, status: 'Fixed' } : item)); };
-  return <AppShell page={page} setPage={setPage}><AnimatePresence mode="wait"><motion.div key={page} className="page-transition" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.16 }}>{page === 'overview' && <Overview findings={findings} onNavigate={setPage} onSelect={selectFinding} />}{page === 'scan' && <ScanWorkspace onComplete={completeScan} target={target} setTarget={setTarget} />}{page === 'findings' && <FindingsPage findings={findings} onSelect={selectFinding} />}{page === 'compliance' && <CompliancePage />}{page === 'secrets' && <SecretsPage />}{page === 'history' && <HistoryPage />}{page === 'reports' && <ReportsPage />}</motion.div></AnimatePresence><AnimatePresence>{selectedFinding && !remediationFinding && <FindingDrawer finding={selectedFinding} onClose={() => setSelectedFinding(null)} onRemediate={() => setRemediationFinding(selectedFinding)} explanationCache={explanationCache} onExplanation={(id, result) => setExplanationCache((current) => ({ ...current, [id]: result }))} />}{remediationFinding && <RemediationModal finding={remediationFinding} onClose={() => setRemediationFinding(null)} onApplied={markApplied} />}</AnimatePresence></AppShell>;
+  return <AppShell page={page} setPage={(nextPage) => { if (nextPage !== 'ai') setAssistantContext(undefined); setPage(nextPage); }}><AnimatePresence mode="wait"><motion.div key={page} className="page-transition" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.16 }}>{page === 'overview' && <Overview findings={findings} onNavigate={setPage} onSelect={selectFinding} />}{page === 'scan' && <ScanWorkspace onComplete={completeScan} target={target} setTarget={setTarget} />}{page === 'findings' && <FindingsPage findings={findings} onSelect={selectFinding} />}{page === 'compliance' && <CompliancePage />}{page === 'secrets' && <SecretsPage />}{page === 'history' && <HistoryPage />}{page === 'reports' && <ReportsPage />}{page === 'ai' && <AskAntiFinePage context={assistantContext} initialQuestion={assistantQuestion} onClearContext={() => setAssistantContext(undefined)} />}</motion.div></AnimatePresence><AnimatePresence>{selectedFinding && !remediationFinding && <FindingDrawer finding={selectedFinding} onClose={() => setSelectedFinding(null)} onRemediate={() => setRemediationFinding(selectedFinding)} onAsk={() => askAboutFinding(selectedFinding)} explanationCache={explanationCache} onExplanation={(id, result) => setExplanationCache((current) => ({ ...current, [id]: result }))} />}{remediationFinding && <RemediationModal finding={remediationFinding} onClose={() => setRemediationFinding(null)} onApplied={markApplied} />}</AnimatePresence></AppShell>;
 }

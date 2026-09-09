@@ -21,6 +21,49 @@ export interface FindingExplanation {
   generated_locally: boolean;
 }
 
+export interface AIHealth {
+  enabled: boolean;
+  available: boolean;
+  provider: string;
+  model: string;
+  error?: string;
+}
+
+export interface AskSource {
+  title: string;
+  source: string;
+  rule_id?: string | null;
+}
+
+export interface AskResponse {
+  answer: string;
+  model: string;
+  provider: string;
+  sources: AskSource[];
+}
+
+export interface AskContext {
+  finding_id: string;
+  rule_id: string;
+  title: string;
+  severity: string;
+  technology: string;
+  framework: string;
+  code_context?: string;
+}
+
+export const fetchAIHealth = async (): Promise<AIHealth> => {
+  return (await apiClient.get<AIHealth>('/ai/health')).data;
+};
+
+export const askAntiFine = async (question: string, context?: AskContext): Promise<AskResponse> => {
+  const response = await apiClient.post<AskResponse>('/ai/ask', {
+    question,
+    context: context ? JSON.stringify(context) : undefined,
+  });
+  return response.data;
+};
+
 export const fetchDashboardStats = async () => {
   return (await apiClient.get('/dashboard')).data;
 };
