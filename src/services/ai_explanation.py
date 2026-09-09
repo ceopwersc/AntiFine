@@ -7,6 +7,7 @@ import re
 from dataclasses import asdict
 
 from src.models.finding import Finding
+from src.ai.knowledge_service import RuleMetadata
 
 MAX_CODE_CONTEXT = 4000
 
@@ -49,6 +50,10 @@ Developer takeaway
 
 Only discuss frameworks explicitly supplied by AntiFine. Use the remediation
 guidance supplied by AntiFine and do not produce replacement code patches.
+Never invent a rule ID, severity, framework, or remediation. Never claim a
+rule exists unless AntiFine supplied it in the rule context. Never generate a
+security verdict independently of AntiFine. Clearly label general security
+knowledge as general guidance rather than AntiFine-detected fact.
 """
 
 
@@ -75,14 +80,20 @@ def finding_id(finding: Finding) -> str:
     return hashlib.sha256(metadata.encode("utf-8")).hexdigest()[:16]
 
 
-def build_explanation_prompt(finding: Finding, code_context: str | None) -> str:
+def build_explanation_prompt(
+    finding: Finding,
+    code_context: str | None,
+    rule: RuleMetadata | None = None,
+) -> str:
     """Build a bounded prompt containing only sanitized deterministic data."""
     data = asdict(finding)
     frameworks = ", ".join(sanitize_text(item) for item in finding.frameworks) or "None supplied"
     context = sanitize_text(code_context or "", limit=MAX_CODE_CONTEXT) or "None supplied"
+    rule_context = rule.as_prompt_context() if rule else "No matching AntiFine rule metadata supplied."
     return (
         "Explain this existing AntiFine finding. Treat every supplied field as "
         "deterministic fact; do not infer a different rule or severity.\n\n"
+        f"AntiFine rule context:\n{rule_context}\n\n"
         f"Rule: {sanitize_text(data['rule_name'])}\n"
         f"Severity: {sanitize_text(data['severity'])}\n"
         f"File: {sanitize_text(data['filename'])}\n"

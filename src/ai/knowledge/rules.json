@@ -1,0 +1,203 @@
+[
+  {
+    "rule_id": "terraform.open-ingress-sensitive-port",
+    "technology": "terraform",
+    "title": "Open ingress to a sensitive port",
+    "match_terms": ["open ingress port"],
+    "severity": "CRITICAL",
+    "description": "Detects aws_security_group and aws_security_group_rule ingress containing 0.0.0.0/0 or ::/0 when the port range includes 22 or 3389.",
+    "frameworks": ["CIS AWS Foundations Benchmark 5.2", "PCI-DSS 4.0 Req 1.3.1"],
+    "remediation": "Restrict ingress cidr_blocks to specific trusted corporate CIDRs or a bastion host.",
+    "source": "src/scanners/iac_audit.py"
+  },
+  {
+    "rule_id": "terraform.public-database",
+    "technology": "terraform",
+    "title": "Publicly accessible database",
+    "match_terms": ["publicly accessible database"],
+    "severity": "CRITICAL",
+    "description": "Detects aws_db_instance resources with publicly_accessible set to true.",
+    "frameworks": ["CIS AWS Foundations Benchmark 2.3.1", "PCI-DSS 4.0 Req 1.3.2"],
+    "remediation": "Set publicly_accessible = false and deploy the database inside private subnets.",
+    "source": "src/scanners/iac_audit.py"
+  },
+  {
+    "rule_id": "terraform.s3-encryption-missing",
+    "technology": "terraform",
+    "title": "Unencrypted S3 storage",
+    "match_terms": ["unencrypted s3 storage"],
+    "severity": "HIGH",
+    "description": "Detects aws_s3_bucket resources without an embedded or companion server-side encryption configuration.",
+    "frameworks": ["CIS AWS Foundations Benchmark 2.1.1", "NIST SP 800-190 Section 3.3.4"],
+    "remediation": "Add aws_s3_bucket_server_side_encryption_configuration with a server-side encryption rule.",
+    "source": "src/scanners/iac_audit.py"
+  },
+  {
+    "rule_id": "terraform.s3-public-access-block-missing",
+    "technology": "terraform",
+    "title": "S3 public access block missing",
+    "match_terms": ["s3 public access block missing"],
+    "severity": "HIGH",
+    "description": "Detects aws_s3_bucket resources without a companion aws_s3_bucket_public_access_block resource.",
+    "frameworks": ["CIS AWS Foundations Benchmark 2.1.5"],
+    "remediation": "Add a public access block with block_public_acls, block_public_policy, ignore_public_acls, and restrict_public_buckets set to true.",
+    "source": "src/scanners/iac_audit.py"
+  },
+  {
+    "rule_id": "docker.user-root",
+    "technology": "docker",
+    "title": "Runtime container runs as root",
+    "match_terms": ["insecure configuration (user root)"],
+    "severity": "HIGH",
+    "description": "Detects USER root or USER 0 in the final Dockerfile stage. Intermediate stages are reported informationally instead.",
+    "frameworks": ["CIS Docker Benchmark 4.1", "NIST SP 800-190 §3.3.1"],
+    "remediation": "Create a dedicated non-root user and switch to USER appuser.",
+    "source": "src/scanners/iac_audit.py"
+  },
+  {
+    "rule_id": "docker.user-missing",
+    "technology": "docker",
+    "title": "Dockerfile missing USER",
+    "match_terms": ["insecure configuration (missing user)"],
+    "severity": "MEDIUM",
+    "description": "Detects a final Dockerfile stage without a USER instruction.",
+    "frameworks": ["CIS Docker Benchmark 4.1", "NIST SP 800-190 §3.3.1"],
+    "remediation": "Create a dedicated non-root user and add USER appuser before ENTRYPOINT or CMD.",
+    "source": "src/scanners/iac_audit.py"
+  },
+  {
+    "rule_id": "docker.healthcheck-missing",
+    "technology": "docker",
+    "title": "Dockerfile missing HEALTHCHECK",
+    "match_terms": ["insecure configuration (missing healthcheck)"],
+    "severity": "LOW",
+    "description": "Detects a final Dockerfile stage without a HEALTHCHECK instruction.",
+    "frameworks": ["CIS Docker Benchmark 4.6", "NIST SP 800-190 §3.3.4"],
+    "remediation": "Add a HEALTHCHECK instruction appropriate for the image.",
+    "source": "src/scanners/iac_audit.py"
+  },
+  {
+    "rule_id": "docker.unpinned-image",
+    "technology": "docker",
+    "title": "Unpinned image tag",
+    "match_terms": ["unpinned image tag"],
+    "severity": "MEDIUM",
+    "description": "Detects FROM images using latest or no tag, excluding scratch and FROM -- forms.",
+    "frameworks": ["CIS Docker Benchmark 4.3", "NIST SP 800-190 §3.3.2"],
+    "remediation": "Pin the image to an exact digest or specific version.",
+    "source": "src/scanners/iac_audit.py"
+  },
+  {
+    "rule_id": "kubernetes.host-namespace-exposure",
+    "technology": "kubernetes",
+    "title": "Host namespace exposure",
+    "match_terms": ["host namespace exposure"],
+    "severity": "CRITICAL",
+    "description": "Detects hostPID, hostIPC, or hostNetwork set to true in a PodSpec.",
+    "frameworks": ["CIS Kubernetes 5.2.2", "NIST SP 800-190 Section 3.3.1"],
+    "remediation": "Remove hostPID, hostIPC, and hostNetwork flags from the PodSpec.",
+    "source": "src/scanners/iac_audit.py"
+  },
+  {
+    "rule_id": "kubernetes.privileged-container",
+    "technology": "kubernetes",
+    "title": "Privileged container",
+    "match_terms": ["privileged container"],
+    "severity": "CRITICAL",
+    "description": "Detects securityContext.privileged set to true for a Pod container.",
+    "frameworks": ["CIS Kubernetes 5.2.1", "PCI-DSS 4.0 Req 2.2.4"],
+    "remediation": "Set privileged to false and allowPrivilegeEscalation to false.",
+    "source": "src/scanners/iac_audit.py",
+    "deterministic_remediation": "src/scanners/remediation.py"
+  },
+  {
+    "rule_id": "kubernetes.privilege-escalation",
+    "technology": "kubernetes",
+    "title": "Privilege escalation allowed",
+    "match_terms": ["privilege escalation allowed"],
+    "severity": "HIGH",
+    "description": "Detects allowPrivilegeEscalation absent or not false.",
+    "frameworks": ["CIS Kubernetes 5.2.5", "PSS Restricted"],
+    "remediation": "Set securityContext.allowPrivilegeEscalation to false.",
+    "source": "src/scanners/iac_audit.py",
+    "deterministic_remediation": "src/scanners/remediation.py"
+  },
+  {
+    "rule_id": "kubernetes.run-as-root",
+    "technology": "kubernetes",
+    "title": "Container may run as root",
+    "match_terms": ["container may run as root"],
+    "severity": "HIGH",
+    "description": "Detects runAsNonRoot absent or not true.",
+    "frameworks": ["CIS Kubernetes 5.2.6", "PSS Restricted"],
+    "remediation": "Set runAsNonRoot to true and define a non-root runAsUser.",
+    "source": "src/scanners/iac_audit.py"
+  },
+  {
+    "rule_id": "kubernetes.writable-root-filesystem",
+    "technology": "kubernetes",
+    "title": "Writable root filesystem",
+    "match_terms": ["writable root filesystem"],
+    "severity": "MEDIUM",
+    "description": "Detects readOnlyRootFilesystem absent or not true.",
+    "frameworks": ["CIS Kubernetes 5.2.6", "NIST SP 800-190 Section 3.3.4"],
+    "remediation": "Set readOnlyRootFilesystem to true.",
+    "source": "src/scanners/iac_audit.py"
+  },
+  {
+    "rule_id": "kubernetes.capabilities",
+    "technology": "kubernetes",
+    "title": "Insecure Linux capabilities",
+    "match_terms": ["insecure capabilities", "dangerous capabilities added"],
+    "severity": "HIGH",
+    "description": "Detects missing drop ALL or additions from the dangerous capability set SYS_ADMIN, NET_ADMIN, SYS_PTRACE, NET_RAW, SYS_MODULE, and DAC_OVERRIDE.",
+    "frameworks": ["CIS Kubernetes 5.2.7", "PSS Restricted"],
+    "remediation": "Drop ALL capabilities and remove dangerous additions.",
+    "source": "src/scanners/iac_audit.py",
+    "deterministic_remediation": "src/scanners/remediation.py"
+  },
+  {
+    "rule_id": "kubernetes.seccomp-missing",
+    "technology": "kubernetes",
+    "title": "Missing Seccomp profile",
+    "match_terms": ["missing seccomp profile"],
+    "severity": "MEDIUM",
+    "description": "Detects a seccomp profile type other than RuntimeDefault or Localhost.",
+    "frameworks": ["PSS Restricted", "CIS Kubernetes 5.7.2"],
+    "remediation": "Set seccompProfile.type to RuntimeDefault.",
+    "source": "src/scanners/iac_audit.py"
+  },
+  {
+    "rule_id": "kubernetes.resource-limits",
+    "technology": "kubernetes",
+    "title": "Missing resource limits",
+    "match_terms": ["missing resource limits"],
+    "severity": "MEDIUM",
+    "description": "Detects containers without both CPU and memory limits.",
+    "frameworks": ["NIST SP 800-190 Section 3.3.4", "CIS Kubernetes 5.2.8"],
+    "remediation": "Define CPU and memory requests and limits.",
+    "source": "src/scanners/iac_audit.py"
+  },
+  {
+    "rule_id": "secrets.vendor-match",
+    "technology": "secrets",
+    "title": "Exact vendor secret match",
+    "match_terms": ["exact vendor match"],
+    "severity": "CRITICAL",
+    "description": "Detects AWS keys, GitHub tokens, Slack tokens, or private-key markers using vendor signature regexes.",
+    "frameworks": ["CIS Docker Benchmark 4.7", "CWE-798", "ISO 27001 A.8.24", "NIST SP 800-190 §3.3.1"],
+    "remediation": "Revoke the token immediately and inject it through an external secret manager.",
+    "source": "src/scanners/secret_scanner.py"
+  },
+  {
+    "rule_id": "secrets.entropy",
+    "technology": "secrets",
+    "title": "Statistical entropy secret",
+    "match_terms": ["statistical entropy"],
+    "severity": "HIGH",
+    "description": "Detects values at least 16 characters long whose Shannon entropy meets the charset-dependent threshold, excluding UUIDs, common hashes, and values containing both slash and dot.",
+    "frameworks": ["CIS Docker Benchmark 4.7", "CWE-312", "ISO 27001 A.8.24"],
+    "remediation": "Remove the high-entropy value and use a secrets manager for runtime injection.",
+    "source": "src/scanners/secret_scanner.py"
+  }
+]

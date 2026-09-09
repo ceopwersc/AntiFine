@@ -169,6 +169,13 @@ Local AI** and presents the result as an **AI Security Explanation**. The explan
 shown below the deterministic finding details; retry and regenerate actions do
 not alter the finding or its remediation state.
 
+### AntiFine knowledge base
+The explanation prompt also receives deterministic context from
+`src/ai/knowledge/rules.json`, looked up by
+`src/ai/knowledge_service.py`. Human-readable source notes live under
+`docs/ai/` for the scan workflow, Terraform, Docker, Kubernetes, secrets,
+compliance, and remediation behavior. This is a local rule catalog only; it
+does not add embeddings, a vector database, RAG, or autonomous behavior.
 Deterministic fixes require a finding from a scan of a file that exists under
 the backend project root. Preview/demo findings in the frontend may reference
 example paths that are not present locally; AntiFine reports that remediation
