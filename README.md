@@ -165,7 +165,7 @@ Invoke-RestMethod -Uri http://127.0.0.1:8000/api/ai/findings/explain `
 ```
 
 The React finding drawer also exposes this workflow through **Explain with
-Local AI**. The explanation is cached for the current frontend session and is
+Local AI** and presents the result as an **AI Security Explanation**. The explanation is cached for the current frontend session and is
 shown below the deterministic finding details; retry and regenerate actions do
 not alter the finding or its remediation state.
 
