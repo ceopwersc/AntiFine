@@ -17,7 +17,7 @@ export default function Reports() {
         setDownloadUrl(result.downloadUrl);
       }
       setTimeout(() => setToastMessage(null), 5000);
-    } catch (_err) {
+    } catch {
       setToastMessage('Error generating report');
       setTimeout(() => setToastMessage(null), 3000);
     } finally {
