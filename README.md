@@ -164,6 +164,11 @@ Invoke-RestMethod -Uri http://127.0.0.1:8000/api/ai/findings/explain `
   -Method Post -ContentType "application/json" -Body $body
 ```
 
+The React finding drawer also exposes this workflow through **Explain with
+Local AI**. The explanation is cached for the current frontend session and is
+shown below the deterministic finding details; retry and regenerate actions do
+not alter the finding or its remediation state.
+
 ### GUI Testing
 To run the Desktop CustomTkinter interface (Optional):
 ```bash
