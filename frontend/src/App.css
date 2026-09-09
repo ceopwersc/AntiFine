@@ -68,6 +68,19 @@ h1 { color: #f1f5fa; font-size: 26px; font-weight: 650; letter-spacing: -.035em;
 .button-secondary:hover:not(:disabled) { border-color: #46617e; background: #1c2c40; }
 .button-success { color: #071a13; background: var(--green); }
 .muted { color: var(--muted); }
+.ai-explanation { border-top: 1px solid var(--border-soft); }
+.ai-label { display: inline-block; margin-top: 5px; color: var(--purple); font-size: 10px; font-weight: 600; }
+.ai-disclaimer { margin-top: 7px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.ai-explain-button { margin-top: 12px; }
+.ai-response { margin-top: 12px; padding: 11px 12px; border: 1px solid #303049; border-radius: 7px; background: rgba(169,147,237,.06); }
+.ai-model { display: block; margin-bottom: 10px; color: var(--purple); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; }
+.ai-response h4 { margin: 11px 0 4px; color: #d9d1ff; font-size: 11px; font-weight: 650; }
+.ai-response h4:first-of-type { margin-top: 0; }
+.ai-response p { color: #b3bdcb; font-size: 11px; line-height: 1.55; }
+.ai-error { display: flex; flex-direction: column; gap: 5px; margin-top: 12px; padding: 10px 11px; border: 1px solid rgba(240,110,121,.35); border-radius: 7px; background: rgba(240,110,121,.06); }
+.ai-error strong { color: #f29aa1; font-size: 11px; }
+.ai-error span { color: var(--muted); font-size: 10px; }
+.ai-error .text-button { align-self: flex-start; margin-top: 3px; }
 .stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 13px; }
 .stat-card { padding: 17px 18px 15px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel); }
 .stat-card-top { display: flex; align-items: center; justify-content: space-between; color: #8392a6; font-size: 11px; }

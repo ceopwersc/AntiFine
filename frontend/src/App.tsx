@@ -38,7 +38,7 @@ import {
   Terminal,
   X,
 } from 'lucide-react';
-import { generateReport, remediateFinding, runScan } from './api';
+import { explainFinding, generateReport, remediateFinding, runScan, type FindingExplanation } from './api';
 import { Area, AreaChart, ResponsiveContainer, Tooltip } from 'recharts';
 
 type Severity = 'Critical' | 'High' | 'Medium' | 'Low';
@@ -342,10 +342,52 @@ function FindingsPage({ findings, onSelect }: { findings: Finding[]; onSelect: (
   return <div className="content-stack"><PageHeader eyebrow="Security posture" title="Findings" description="Review, prioritize, and remediate issues discovered across your infrastructure." action={<button className="button button-secondary"><Download size={15} />Export CSV</button>} /><div className="finding-toolbar"><div className="search-input"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search findings, files, or frameworks" /><kbd>⌘ K</kbd></div><div className="filter-group"><SlidersHorizontal size={15} className="muted" /><select value={severity} onChange={(event) => setSeverity(event.target.value as Severity | 'All')} aria-label="Filter by severity"><option value="All">All severities</option><option>Critical</option><option>High</option><option>Medium</option><option>Low</option></select><select value={status} onChange={(event) => setStatus(event.target.value as 'All' | Finding['status'])} aria-label="Filter by status"><option value="All">All status</option><option>Open</option><option>Fixed</option><option>Accepted</option></select><button className="icon-button" aria-label="More filters"><Filter size={16} /></button></div></div><div className="panel table-panel"><div className="table-meta"><span><strong>{filtered.length}</strong> findings</span><span>Last scan 12 min ago · <span className="live-text">Live data</span></span></div><div className="table-scroll"><table className="findings-table"><thead><tr><th>Finding</th><th>Severity</th><th>Location</th><th>Framework</th><th>Status</th><th aria-label="Actions" /></tr></thead><tbody>{filtered.map((finding) => <tr key={finding.id} onClick={() => onSelect(finding)}><td><div className="finding-cell"><div className={`finding-icon ${finding.severity.toLowerCase()}`}><ShieldAlert size={15} /></div><div><strong>{finding.rule_name}</strong><span>{finding.id}</span></div></div></td><td><SeverityBadge severity={finding.severity} /></td><td><code>{finding.file}</code><span className="line-number">:{finding.line}</span></td><td><span className="framework-pill">{finding.framework}</span></td><td><span className={`status-badge ${finding.status.toLowerCase()}`}><span />{finding.status}</span></td><td><ChevronRight size={16} className="muted" /></td></tr>)}</tbody></table></div>{filtered.length === 0 && <div className="empty-state"><Search size={24} /><strong>No findings match these filters</strong><span>Try a different search or reset the filters.</span></div>}<div className="table-footer"><span>Showing {filtered.length} of {findings.length}</span><div><button className="pagination-button" disabled>Previous</button><button className="pagination-button active">1</button><button className="pagination-button">Next</button></div></div></div></div>;
 }
 
-function FindingDrawer({ finding, onClose, onRemediate }: { finding: Finding; onClose: () => void; onRemediate: () => void }) {
+function renderExplanation(explanation: string) {
+  return explanation.split(/\n+/).map((line, index) => {
+    const heading = line.replace(/[*#]/g, '').replace(/:$/, '').trim();
+    const section = /^(What was detected|Why it matters|Compliance impact|Recommended action|Developer takeaway)$/i.test(heading);
+    return section
+      ? <h4 key={`${line}-${index}`}>{heading}</h4>
+      : line.trim() ? <p key={`${line}-${index}`}>{line.replace(/^\s*[-*]\s*/, '')}</p> : null;
+  });
+}
+
+function FindingDrawer({
+  finding,
+  onClose,
+  onRemediate,
+  explanationCache,
+  onExplanation,
+}: {
+  finding: Finding;
+  onClose: () => void;
+  onRemediate: () => void;
+  explanationCache: Record<string, FindingExplanation>;
+  onExplanation: (findingId: string, explanation: FindingExplanation) => void;
+}) {
   const [copied, setCopied] = useState(false);
+  const [loadingAI, setLoadingAI] = useState(false);
+  const [aiError, setAIError] = useState('');
+  const explanation = explanationCache[finding.id];
   const copy = () => { void navigator.clipboard?.writeText(finding.remediation); setCopied(true); window.setTimeout(() => setCopied(false), 1500); };
-  return <><motion.button className="drawer-scrim" onClick={onClose} aria-label="Close finding details" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} /><motion.aside className="detail-drawer" role="dialog" aria-modal="true" aria-label="Finding details" initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: 'spring', damping: 28, stiffness: 260 }}><div className="drawer-header"><div><span className="drawer-eyebrow">Finding {finding.id}</span><h2>{finding.rule_name}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={19} /></button></div><div className="drawer-content"><div className="drawer-badges"><SeverityBadge severity={finding.severity} /><span className={`status-badge ${finding.status.toLowerCase()}`}><span />{finding.status}</span></div><section className="drawer-section"><h3>Why this matters</h3><p>{finding.description}</p></section><section className="drawer-section"><h3>Location</h3><div className="location-card"><FileCode2 size={16} /><code>{finding.file}</code><span>Line {finding.line}</span><button className="icon-button small" aria-label="Copy location" onClick={() => void navigator.clipboard?.writeText(`${finding.file}:${finding.line}`)}><Copy size={14} /></button></div></section><section className="drawer-section"><h3>Compliance mapping</h3><div className="framework-list">{finding.frameworks.map((framework) => <span key={framework} className="framework-pill">{framework}</span>)}</div></section><section className="drawer-section remediation-preview"><div className="section-heading-row"><h3>Recommended remediation</h3><button className="text-button" onClick={copy}>{copied ? <><Check size={13} />Copied</> : <><Copy size={13} />Copy</>}</button></div><p>{finding.remediation}</p><pre>{finding.after}</pre></section></div><div className="drawer-footer"><button className="button button-secondary" onClick={onClose}>Dismiss</button><button className="button button-primary" onClick={onRemediate}><Sparkles size={15} />Review fix</button></div></motion.aside></>;
+  const requestExplanation = async () => {
+    setLoadingAI(true); setAIError('');
+    try {
+      const result = await explainFinding({
+        rule_name: finding.rule_name,
+        severity: finding.severity.toUpperCase(),
+        filename: finding.file,
+        frameworks: finding.frameworks,
+        remediation: finding.remediation,
+        description: finding.description,
+      }, finding.before);
+      onExplanation(finding.id, result);
+    } catch (error: any) {
+      const detail = error?.response?.data?.detail;
+      setAIError(detail || 'Local AI unavailable');
+    } finally { setLoadingAI(false); }
+  };
+  return <><motion.button className="drawer-scrim" onClick={onClose} aria-label="Close finding details" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} /><motion.aside className="detail-drawer" role="dialog" aria-modal="true" aria-label="Finding details" initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: 'spring', damping: 28, stiffness: 260 }}><div className="drawer-header"><div><span className="drawer-eyebrow">Finding {finding.id}</span><h2>{finding.rule_name}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={19} /></button></div><div className="drawer-content"><div className="drawer-badges"><SeverityBadge severity={finding.severity} /><span className={`status-badge ${finding.status.toLowerCase()}`}><span />{finding.status}</span></div><section className="drawer-section"><h3>Why this matters</h3><p>{finding.description}</p></section><section className="drawer-section"><h3>Location</h3><div className="location-card"><FileCode2 size={16} /><code>{finding.file}</code><span>Line {finding.line}</span><button className="icon-button small" aria-label="Copy location" onClick={() => void navigator.clipboard?.writeText(`${finding.file}:${finding.line}`)}><Copy size={14} /></button></div></section><section className="drawer-section"><h3>Compliance mapping</h3><div className="framework-list">{finding.frameworks.map((framework) => <span key={framework} className="framework-pill">{framework}</span>)}</div></section><section className="drawer-section remediation-preview"><div className="section-heading-row"><h3>Recommended remediation</h3><button className="text-button" onClick={copy}>{copied ? <><Check size={13} />Copied</> : <><Copy size={13} />Copy</>}</button></div><p>{finding.remediation}</p><pre>{finding.after}</pre></section><section className="drawer-section ai-explanation" aria-live="polite"><div className="section-heading-row"><div><h3>Local AI explanation</h3><span className="ai-label">Local AI · Ollama</span></div>{explanation && <button className="text-button" onClick={() => void requestExplanation()} disabled={loadingAI}>{loadingAI ? 'Analyzing locally…' : 'Regenerate'}</button>}</div><p className="ai-disclaimer">AI-generated explanation based on AntiFine's deterministic finding.</p>{aiError ? <div className="ai-error"><strong>Local AI unavailable</strong><span>AntiFine's deterministic security analysis is still available.</span><button className="text-button" onClick={() => void requestExplanation()} disabled={loadingAI}>Retry</button></div> : explanation ? <div className="ai-response"><span className="ai-model">{explanation.model} · generated locally</span>{renderExplanation(explanation.explanation)}</div> : <button className="button button-secondary ai-explain-button" onClick={() => void requestExplanation()} disabled={loadingAI}>{loadingAI ? <><RefreshCw size={15} className="spin" />Analyzing locally…</> : <><Sparkles size={15} />Explain with Local AI</>}</button>}</section></div><div className="drawer-footer"><button className="button button-secondary" onClick={onClose}>Dismiss</button><button className="button button-primary" onClick={onRemediate}><Sparkles size={15} />Review fix</button></div></motion.aside></>;
 }
 
 function RemediationModal({ finding, onClose, onApplied }: { finding: Finding; onClose: () => void; onApplied: () => void }) {
@@ -382,9 +424,10 @@ export default function App() {
   const [findings, setFindings] = useState<Finding[]>(mockFindings);
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
   const [remediationFinding, setRemediationFinding] = useState<Finding | null>(null);
+  const [explanationCache, setExplanationCache] = useState<Record<string, FindingExplanation>>({});
   const [target, setTarget] = useState('infra/production.tf');
   const selectFinding = (finding: Finding) => setSelectedFinding(finding);
   const completeScan = (nextFindings: Finding[]) => { setFindings(nextFindings); setPage('findings'); };
   const markApplied = () => { if (remediationFinding) setFindings((current) => current.map((item) => item.id === remediationFinding.id ? { ...item, status: 'Fixed' } : item)); };
-  return <AppShell page={page} setPage={setPage}><AnimatePresence mode="wait"><motion.div key={page} className="page-transition" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.16 }}>{page === 'overview' && <Overview findings={findings} onNavigate={setPage} onSelect={selectFinding} />}{page === 'scan' && <ScanWorkspace onComplete={completeScan} target={target} setTarget={setTarget} />}{page === 'findings' && <FindingsPage findings={findings} onSelect={selectFinding} />}{page === 'compliance' && <CompliancePage />}{page === 'secrets' && <SecretsPage />}{page === 'history' && <HistoryPage />}{page === 'reports' && <ReportsPage />}</motion.div></AnimatePresence><AnimatePresence>{selectedFinding && !remediationFinding && <FindingDrawer finding={selectedFinding} onClose={() => setSelectedFinding(null)} onRemediate={() => setRemediationFinding(selectedFinding)} />}{remediationFinding && <RemediationModal finding={remediationFinding} onClose={() => setRemediationFinding(null)} onApplied={markApplied} />}</AnimatePresence></AppShell>;
+  return <AppShell page={page} setPage={setPage}><AnimatePresence mode="wait"><motion.div key={page} className="page-transition" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.16 }}>{page === 'overview' && <Overview findings={findings} onNavigate={setPage} onSelect={selectFinding} />}{page === 'scan' && <ScanWorkspace onComplete={completeScan} target={target} setTarget={setTarget} />}{page === 'findings' && <FindingsPage findings={findings} onSelect={selectFinding} />}{page === 'compliance' && <CompliancePage />}{page === 'secrets' && <SecretsPage />}{page === 'history' && <HistoryPage />}{page === 'reports' && <ReportsPage />}</motion.div></AnimatePresence><AnimatePresence>{selectedFinding && !remediationFinding && <FindingDrawer finding={selectedFinding} onClose={() => setSelectedFinding(null)} onRemediate={() => setRemediationFinding(selectedFinding)} explanationCache={explanationCache} onExplanation={(id, result) => setExplanationCache((current) => ({ ...current, [id]: result }))} />}{remediationFinding && <RemediationModal finding={remediationFinding} onClose={() => setRemediationFinding(null)} onApplied={markApplied} />}</AnimatePresence></AppShell>;
 }
