@@ -85,6 +85,95 @@ npm run dev
 ```
 Visit `http://localhost:5173` to see compliance dashboards, run scans, and generate reports.
 
+### Deterministic remediation
+The dashboard can apply supported fixes from the finding drawer through
+`POST /api/scan/iac/remediate`. The endpoint is restricted to project-relative
+files, creates a sibling `<filename>.bak` backup before writing, rejects
+unsupported rules, and re-scans the file before returning the remaining
+findings. It currently supports safe Dockerfile USER/HEALTHCHECK fixes,
+Kubernetes privilege flags, and Terraform `publicly_accessible = false`.
+
+### Optional local Ollama integration
+AntiFine works normally without Ollama. The optional AI integration only
+provides a direct local text-generation test endpoint; it is not used by
+scanning, secret detection, compliance mapping, remediation, or CI gates.
+
+Configure it with environment variables:
+
+```bash
+OLLAMA_ENABLED=true
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=qwen2.5:7b
+OLLAMA_TIMEOUT=30
+```
+
+AntiFine reads these values from the process environment using its existing
+`os.getenv` configuration pattern. For local development, `src/services/ollama_service.py`
+loads the project-root `.env` file with `python-dotenv`; explicit process
+environment variables take precedence. The repository includes `.env.example`
+as a template, and `.env` is ignored by Git. On Windows PowerShell, you can
+also set the values before starting FastAPI:
+
+```powershell
+$env:OLLAMA_ENABLED = "true"
+$env:OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+$env:OLLAMA_MODEL = "qwen2.5:7b"
+$env:OLLAMA_TIMEOUT = "30"
+```
+
+Start Ollama and pull the default model:
+
+```bash
+ollama serve
+ollama pull qwen2.5:7b
+```
+
+Check the integration without exposing credentials:
+
+```bash
+curl http://127.0.0.1:8000/api/ai/health
+curl -X POST http://127.0.0.1:8000/api/ai/test \
+  -H "Content-Type: application/json" \
+  -d "{\"prompt\":\"Explain Terraform in one sentence.\"}"
+```
+
+`GET /api/ai/health` reports whether the configured model is available.
+`POST /api/ai/test` rejects empty prompts and returns a clean error if the
+integration is disabled or Ollama cannot be reached.
+
+### Finding explanations
+The first AI-assisted workflow accepts an existing deterministic `Finding`
+and asks Ollama for a concise developer explanation. It does not detect new
+issues, change severity or compliance mappings, edit files, or apply fixes.
+Secret-like values are redacted and code context is bounded before it is sent
+to the local model:
+
+```powershell
+$body = @{
+  finding = @{
+    rule_name = "Open Ingress Port (22-22) to 0.0.0.0/0 in main.tf"
+    severity = "CRITICAL"
+    filename = "main.tf"
+    frameworks = @("CIS AWS Foundations Benchmark 5.2")
+    remediation = "Restrict ingress cidr_blocks to trusted CIDRs."
+    description = "SSH is exposed to the public internet."
+  }
+  code_context = 'cidr_blocks = ["0.0.0.0/0"]'
+} | ConvertTo-Json
+Invoke-RestMethod -Uri http://127.0.0.1:8000/api/ai/findings/explain `
+  -Method Post -ContentType "application/json" -Body $body
+```
+
+The React finding drawer also exposes this workflow through **Explain with
+Local AI** and presents the result as an **AI Security Explanation**. The explanation is cached for the current frontend session and is
+shown below the deterministic finding details; retry and regenerate actions do
+not alter the finding or its remediation state.
+
+Deterministic fixes require a finding from a scan of a file that exists under
+the backend project root. Preview/demo findings in the frontend may reference
+example paths that are not present locally; AntiFine reports that remediation
+error and does not mark the finding as fixed.
+
 ### GUI Testing
 To run the Desktop CustomTkinter interface (Optional):
 ```bash
@@ -93,9 +182,3 @@ python src/main.py --gui
 ```
 
 ---
-
-## Running Tests
-Run the test suite using pytest:
-```bash
-python -m pytest tests/ -v
-```

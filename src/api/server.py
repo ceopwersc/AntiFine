@@ -24,10 +24,23 @@ if str(PROJECT_ROOT) not in sys.path:
 from database.setup import DB_PATH, initialize_database
 from src.scanners.ssrf_scanner import run_web_audit
 from src.scanners.iac_audit import run_iac_audit
+from src.scanners.remediation import RemediationError, remediate_file
 from src.scanners.compliance_mapper import map_finding_to_framework, get_finding_metadata
 from src.reporting.generate import generate_report
 from src.reporting.sarif_exporter import export_to_sarif
 from src.integrations.soc_dispatcher import dispatch_security_alert
+from src.services.ollama_service import (
+    OllamaConfig,
+    OllamaDisabledError,
+    OllamaError,
+    OllamaService,
+)
+from src.models.finding import Finding
+from src.services.ai_explanation import (
+    SYSTEM_PROMPT,
+    build_explanation_prompt,
+    finding_id,
+)
 
 
 # ── Initialization ──────────────────────────────────────────────────────────
@@ -62,6 +75,10 @@ class SSRFScanRequest(BaseModel):
 class IaCScanRequest(BaseModel):
     target_path: str
 
+class RemediationRequest(BaseModel):
+    target_path: str
+    rule_name: str
+
 class WebhookModel(BaseModel):
     url: str
     min_severity: str = "HIGH"
@@ -69,10 +86,25 @@ class WebhookModel(BaseModel):
 class WebhookTestModel(BaseModel):
     url: str
 
+class AITestRequest(BaseModel):
+    prompt: str
+
+class FindingExplanationRequest(BaseModel):
+    finding: Finding
+    code_context: str | None = None
+
 
 # ── Severity rank helper ────────────────────────────────────────────────────
 
 _SEVERITY_RANKS = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+
+
+def _ollama_error_message(exc: OllamaError) -> str:
+    if isinstance(exc, OllamaDisabledError):
+        return "Ollama integration is disabled"
+    if "not reachable" in str(exc).lower():
+        return "Ollama is not reachable"
+    return str(exc)
 
 
 # ── Webhook URL validation ──────────────────────────────────────────────────
@@ -268,6 +300,62 @@ async def run_ssrf_scan(req: SSRFScanRequest, background_tasks: BackgroundTasks)
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@app.get("/api/ai/health")
+async def ollama_health() -> Dict[str, Any]:
+    """Report optional Ollama availability without affecting AntiFine startup."""
+    config = OllamaConfig.from_env()
+    response: Dict[str, Any] = {
+        "enabled": config.enabled,
+        "available": False,
+        "provider": "ollama",
+        "model": config.model,
+    }
+    if not config.enabled:
+        return response
+    try:
+        await OllamaService(config).health_check()
+        response["available"] = True
+    except OllamaError as exc:
+        response["error"] = _ollama_error_message(exc)
+    return response
+
+
+@app.post("/api/ai/test")
+async def ollama_test(req: AITestRequest) -> Dict[str, str]:
+    """Send one explicit, isolated prompt to the configured local model."""
+    if not req.prompt.strip():
+        raise HTTPException(status_code=422, detail="Prompt must not be empty")
+    try:
+        response = await OllamaService().generate(req.prompt)
+        return {"response": response}
+    except OllamaDisabledError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except OllamaError as exc:
+        raise HTTPException(status_code=502, detail=_ollama_error_message(exc)) from exc
+
+
+@app.post("/api/ai/findings/explain")
+async def explain_finding(req: FindingExplanationRequest) -> Dict[str, Any]:
+    """Explain an existing deterministic finding using the local model."""
+    service = OllamaService()
+    try:
+        explanation = await service.generate(
+            build_explanation_prompt(req.finding, req.code_context),
+            system_prompt=SYSTEM_PROMPT,
+        )
+        return {
+            "finding_id": finding_id(req.finding),
+            "model": service.config.model,
+            "provider": "ollama",
+            "explanation": explanation,
+            "generated_locally": True,
+        }
+    except OllamaDisabledError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except OllamaError as exc:
+        raise HTTPException(status_code=502, detail=_ollama_error_message(exc)) from exc
+
+
 @app.post("/api/scan/iac")
 async def run_iac_scan(req: IaCScanRequest, background_tasks: BackgroundTasks) -> Dict[str, Any]:
     """Execute the IaC scanner against a local file or directory.
@@ -351,6 +439,32 @@ async def run_iac_scan(req: IaCScanRequest, background_tasks: BackgroundTasks) -
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/scan/iac/remediate")
+async def remediate_iac(req: RemediationRequest) -> Dict[str, Any]:
+    """Safely apply one supported fix, back up the file, and re-scan it."""
+    try:
+        resolved = _resolve_and_sandbox(req.target_path)
+        result = remediate_file(resolved, req.rule_name)
+        findings = run_iac_audit(str(resolved), persist=False)
+        return {
+            "status": "remediated",
+            "target": str(resolved),
+            "backup": str(result.backup_path),
+            "action": result.action,
+            "findings_count": len(findings),
+            "findings": [
+                {"rule_name": f.rule_name, "severity": f.severity}
+                for f in findings
+            ],
+        }
+    except (RemediationError, UnicodeDecodeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Could not update target: {exc}") from exc
 
 
 @app.get("/api/integrations/webhooks")

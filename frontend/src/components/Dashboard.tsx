@@ -1,7 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ShieldAlert, ShieldCheck, Download, Play, Copy, Terminal, X, Check, Search, Shield, ShieldQuestion, ChevronRight, Activity } from 'lucide-react';
-import { runScan, generateReport } from '../api';
+import { runScan, generateReport, remediateFinding } from '../api';
 
 interface Finding {
   rule_name: string;
@@ -21,6 +21,7 @@ export default function Dashboard() {
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isRemediating, setIsRemediating] = useState(false);
 
   const handleScan = async () => {
     if (!target.trim()) return;
@@ -62,6 +63,21 @@ export default function Dashboard() {
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleRemediate = async () => {
+    if (!selectedFinding) return;
+    setIsRemediating(true);
+    setError(null);
+    try {
+      await remediateFinding(target, selectedFinding.rule_name);
+      setSelectedFinding(null);
+      await handleScan();
+    } catch (err: any) {
+      setError(err?.response?.data?.detail ?? err?.message ?? 'Remediation failed.');
+    } finally {
+      setIsRemediating(false);
+    }
   };
 
   const getSeverityColors = (sev: string) => {
@@ -318,6 +334,13 @@ export default function Dashboard() {
                       {copied ? 'Copied!' : 'Copy Code'}
                     </button>
                   </div>
+                  <button
+                    onClick={handleRemediate}
+                    disabled={isRemediating}
+                    className="mb-3 w-full rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
+                  >
+                    {isRemediating ? 'Applying fix...' : 'Apply deterministic fix'}
+                  </button>
                   <pre className="p-4 rounded-xl bg-[#030712] border border-slate-800 text-slate-300 font-mono text-sm overflow-x-auto">
                     <code>{selectedFinding.remediation}</code>
                   </pre>

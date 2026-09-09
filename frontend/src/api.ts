@@ -4,6 +4,23 @@ const apiClient = axios.create({
   baseURL: 'http://localhost:8000/api',
 });
 
+export interface ExplainableFinding {
+  rule_name: string;
+  severity: string;
+  filename: string;
+  frameworks: string[];
+  remediation: string;
+  description: string;
+}
+
+export interface FindingExplanation {
+  finding_id: string;
+  model: string;
+  provider: string;
+  explanation: string;
+  generated_locally: boolean;
+}
+
 export const fetchDashboardStats = async () => {
   return (await apiClient.get('/dashboard')).data;
 };
@@ -13,6 +30,24 @@ export const runScan = async (target: string, type: string) => {
   const endpoint = isIaC ? '/scan/iac' : '/scan/ssrf';
   const body = isIaC ? { target_path: target } : { target_url: target };
   return (await apiClient.post(endpoint, body)).data;
+};
+
+export const remediateFinding = async (target: string, ruleName: string) => {
+  return (await apiClient.post('/scan/iac/remediate', {
+    target_path: target,
+    rule_name: ruleName,
+  })).data;
+};
+
+export const explainFinding = async (
+  finding: ExplainableFinding,
+  codeContext?: string,
+): Promise<FindingExplanation> => {
+  const response = await apiClient.post<FindingExplanation>('/ai/findings/explain', {
+    finding,
+    code_context: codeContext,
+  });
+  return response.data;
 };
 
 export const generateReport = async (format: string) => {

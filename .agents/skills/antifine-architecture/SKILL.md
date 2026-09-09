@@ -14,6 +14,11 @@ This skill provides a deep dive into the AntiFine IaC scanning tool. Use this co
 - **Secret Scanner**: `src/scanners/secret_scanner.py` centrally handles high-confidence vendor regexes and character-set adjusted Shannon entropy filtering.
 - **Compliance Mapper**: `src/scanners/compliance_mapper.py` translates findings into rich structures with frameworks (e.g., CIS Benchmarks, NIST SP 800-190) and remediation guidance.
 - **Reporting**: `src/reporting/sarif_exporter.py` translates findings to OASIS SARIF v2.1.0 JSON format for CI/CD ingestion, injecting compliance framework and remediation metadata natively.
+- **Remediation**: `src/scanners/remediation.py` applies a small allowlist of deterministic Dockerfile, Kubernetes, and Terraform fixes after creating a `.bak` backup, then the API re-scans the target.
+- The remediation UI only marks a finding fixed after the API confirms success; missing demo or preview paths remain open and show the backend validation error.
+- The finding drawer presents Ollama output as a secondary AI Security Explanation, with session caching and retry/regenerate controls.
+- The repository currently keeps the runtime application clean without the removed local test suite or test fixtures; validation is performed externally when needed.
+- **Optional Ollama**: `src/services/ollama_service.py` is a lazy, environment-configured client for local Ollama text generation. It loads the project-root `.env` file with `python-dotenv`, then reads `OLLAMA_ENABLED`, `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, and `OLLAMA_TIMEOUT` with the existing `os.getenv` pattern; explicit process environment variables take precedence. It is exposed only through `/api/ai/health` and `/api/ai/test`; it is never part of deterministic scanning or remediation.
 - **Frontend Workspace**: React/Vite application (`frontend/`) heavily utilizing Tailwind CSS (dark-mode cybersecurity aesthetic) and Lucide icons. `Dashboard.tsx` serves as an interactive Remediation Workspace with real-time KPI filtering, on-demand scanning, and a slide-over code remediation drawer.
 
 ## 2. CI/CD & Gating (`src/cli/gate.py`)
