@@ -10,15 +10,22 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import httpx
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "http://127.0.0.1:11434"
 DEFAULT_MODEL = "qwen2.5:7b"
 DEFAULT_TIMEOUT = 30.0
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Load local development configuration once; explicit process environment
+# variables remain authoritative because override is disabled.
+load_dotenv(PROJECT_ROOT / ".env", override=False)
 
 
 class OllamaError(RuntimeError):

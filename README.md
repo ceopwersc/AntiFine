@@ -108,9 +108,11 @@ OLLAMA_TIMEOUT=30
 ```
 
 AntiFine reads these values from the process environment using its existing
-`os.getenv` configuration pattern. The repository includes `.env.example` as
-a template, but it is not loaded automatically and should not be committed as
-`.env`. On Windows PowerShell, set the values before starting FastAPI:
+`os.getenv` configuration pattern. For local development, `src/services/ollama_service.py`
+loads the project-root `.env` file with `python-dotenv`; explicit process
+environment variables take precedence. The repository includes `.env.example`
+as a template, and `.env` is ignored by Git. On Windows PowerShell, you can
+also set the values before starting FastAPI:
 
 ```powershell
 $env:OLLAMA_ENABLED = "true"
