@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api.server import app
+from src.models.finding import Finding
 from src.services.ollama_service import (
     OllamaConfig,
     OllamaDisabledError,
@@ -14,6 +15,17 @@ from src.services.ollama_service import (
     OllamaTimeoutError,
     OllamaUnavailableError,
 )
+from src.services.ai_explanation import MAX_CODE_CONTEXT, build_explanation_prompt, sanitize_text
+
+
+FINDING = {
+    "rule_name": "Open Ingress Port (22-22) to 0.0.0.0/0 in main.tf",
+    "severity": "CRITICAL",
+    "filename": "main.tf",
+    "frameworks": ["CIS AWS Foundations Benchmark 5.2"],
+    "remediation": "Restrict ingress cidr_blocks to trusted CIDRs.",
+    "description": "SSH is exposed to the public internet.",
+}
 
 
 def test_disabled_generation(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -115,3 +127,72 @@ def test_ai_test_rejects_empty_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
     response = TestClient(app).post("/api/ai/test", json={"prompt": "  "})
 
     assert response.status_code == 422
+
+
+def test_secret_redaction_and_context_truncation() -> None:
+    secret = "AKIA1234567890ABCDEF password=super-secret-value"
+    sanitized = sanitize_text(secret)
+    prompt = build_explanation_prompt(
+        Finding(**FINDING),
+        "x" * (MAX_CODE_CONTEXT + 1),
+    )
+
+    assert "AKIA1234567890ABCDEF" not in sanitized
+    assert "super-secret-value" not in sanitized
+    assert "[REDACTED" in sanitized
+    assert "[TRUNCATED]" in prompt
+
+
+def test_explain_finding_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, str] = {}
+
+    class FakeService:
+        config = OllamaConfig(enabled=True, model="qwen2.5:7b")
+
+        async def generate(self, prompt: str, system_prompt: str | None = None) -> str:
+            captured["prompt"] = prompt
+            captured["system_prompt"] = system_prompt or ""
+            return "What was detected\nCRITICAL public SSH exposure."
+
+    monkeypatch.setattr("src.api.server.OllamaService", FakeService)
+    response = TestClient(app).post(
+        "/api/ai/findings/explain",
+        json={"finding": FINDING, "code_context": "cidr_blocks = [\"0.0.0.0/0\"]"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["provider"] == "ollama"
+    assert body["model"] == "qwen2.5:7b"
+    assert body["generated_locally"] is True
+    assert "CRITICAL" in captured["prompt"]
+    assert "CIS AWS Foundations Benchmark 5.2" in captured["prompt"]
+    assert "AntiFine Security Assistant" in captured["system_prompt"]
+
+
+@pytest.mark.parametrize(
+    ("error", "status"),
+    [
+        (OllamaDisabledError("Ollama integration is disabled"), 503),
+        (OllamaUnavailableError("Ollama is not reachable"), 502),
+        (OllamaResponseError("Ollama response did not contain text"), 502),
+    ],
+)
+def test_explain_finding_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+    status: int,
+) -> None:
+    class FakeService:
+        config = OllamaConfig(enabled=True)
+
+        async def generate(self, prompt: str, system_prompt: str | None = None) -> str:
+            raise error
+
+    monkeypatch.setattr("src.api.server.OllamaService", FakeService)
+    response = TestClient(app).post(
+        "/api/ai/findings/explain",
+        json={"finding": FINDING},
+    )
+
+    assert response.status_code == status

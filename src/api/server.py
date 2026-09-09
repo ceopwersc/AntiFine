@@ -35,6 +35,12 @@ from src.services.ollama_service import (
     OllamaError,
     OllamaService,
 )
+from src.models.finding import Finding
+from src.services.ai_explanation import (
+    SYSTEM_PROMPT,
+    build_explanation_prompt,
+    finding_id,
+)
 
 
 # ── Initialization ──────────────────────────────────────────────────────────
@@ -82,6 +88,10 @@ class WebhookTestModel(BaseModel):
 
 class AITestRequest(BaseModel):
     prompt: str
+
+class FindingExplanationRequest(BaseModel):
+    finding: Finding
+    code_context: str | None = None
 
 
 # ── Severity rank helper ────────────────────────────────────────────────────
@@ -318,6 +328,28 @@ async def ollama_test(req: AITestRequest) -> Dict[str, str]:
     try:
         response = await OllamaService().generate(req.prompt)
         return {"response": response}
+    except OllamaDisabledError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except OllamaError as exc:
+        raise HTTPException(status_code=502, detail=_ollama_error_message(exc)) from exc
+
+
+@app.post("/api/ai/findings/explain")
+async def explain_finding(req: FindingExplanationRequest) -> Dict[str, Any]:
+    """Explain an existing deterministic finding using the local model."""
+    service = OllamaService()
+    try:
+        explanation = await service.generate(
+            build_explanation_prompt(req.finding, req.code_context),
+            system_prompt=SYSTEM_PROMPT,
+        )
+        return {
+            "finding_id": finding_id(req.finding),
+            "model": service.config.model,
+            "provider": "ollama",
+            "explanation": explanation,
+            "generated_locally": True,
+        }
     except OllamaDisabledError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except OllamaError as exc:

@@ -141,6 +141,29 @@ curl -X POST http://127.0.0.1:8000/api/ai/test \
 `POST /api/ai/test` rejects empty prompts and returns a clean error if the
 integration is disabled or Ollama cannot be reached.
 
+### Finding explanations
+The first AI-assisted workflow accepts an existing deterministic `Finding`
+and asks Ollama for a concise developer explanation. It does not detect new
+issues, change severity or compliance mappings, edit files, or apply fixes.
+Secret-like values are redacted and code context is bounded before it is sent
+to the local model:
+
+```powershell
+$body = @{
+  finding = @{
+    rule_name = "Open Ingress Port (22-22) to 0.0.0.0/0 in main.tf"
+    severity = "CRITICAL"
+    filename = "main.tf"
+    frameworks = @("CIS AWS Foundations Benchmark 5.2")
+    remediation = "Restrict ingress cidr_blocks to trusted CIDRs."
+    description = "SSH is exposed to the public internet."
+  }
+  code_context = 'cidr_blocks = ["0.0.0.0/0"]'
+} | ConvertTo-Json
+Invoke-RestMethod -Uri http://127.0.0.1:8000/api/ai/findings/explain `
+  -Method Post -ContentType "application/json" -Body $body
+```
+
 ### GUI Testing
 To run the Desktop CustomTkinter interface (Optional):
 ```bash
