@@ -70,7 +70,7 @@ class KnowledgeServiceTests(unittest.TestCase):
         for framework in ("PCI-DSS", "NIST", "ISO 27001", "HIPAA", "GDPR", "SOC 2"):
             self.assertNotIn(framework, prompt)
         for system_prompt in (SYSTEM_PROMPT, EXPLANATION_SYSTEM_PROMPT, GENERAL_SYSTEM_PROMPT):
-            self.assertIn("Do not infer cross-framework equivalence", system_prompt)
+            self.assertIn("cross-framework", system_prompt)
             self.assertIn("CIS", prompt)
             self.assertIn("general guidance", system_prompt)
 

@@ -407,7 +407,17 @@ async def ask_ai(req: AIAskRequest) -> Dict[str, Any]:
         [],
         structured_context=req.context,
     )
-    retrieved = retrieve(f"{req.question}\n{context_text}", top_k=5)
+    rule_id = None
+    frameworks = None
+    if isinstance(req.context, AIContext) and req.context.source == "finding" and req.context.finding:
+        rule_id = req.context.finding.rule_id
+        frameworks = req.context.finding.frameworks
+    retrieved = retrieve(
+        f"{req.question}\n{context_text}",
+        top_k=5,
+        authoritative_rule_id=rule_id,
+        authoritative_frameworks=frameworks,
+    )
     try:
         service = OllamaService()
         answer = await service.generate(

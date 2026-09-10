@@ -130,6 +130,15 @@ def build_context(
             f"Remediation: {sanitize_text(finding.remediation)}"
         )
     context_source, supplied_context = format_ai_context(structured_context)
+    authoritative_compliance = "None supplied"
+    if isinstance(structured_context, AIContext) and structured_context.source == "finding":
+        finding_context = structured_context.finding
+        if finding_context and finding_context.frameworks:
+            authoritative_compliance = ", ".join(
+                _value(item) for item in finding_context.frameworks
+            )
+        elif finding_context:
+            authoritative_compliance = "No framework mappings supplied for this finding"
     history = messages[-MAX_MESSAGES:] if messages else []
     history_text = "\n".join(
         f"{message.role.upper()}: {sanitize_text(message.content, limit=MAX_MESSAGE_CHARS)}"
@@ -141,6 +150,11 @@ def build_context(
         f"Sanitized code context:\n{sanitize_text(code_context or '', limit=4000) or 'None supplied'}\n\n"
         f"SUPPLIED STRUCTURED CONTEXT (source: {context_source})\n"
         f"{supplied_context}\n\n"
+        "AUTHORITATIVE FINDING COMPLIANCE (allowlist)\n"
+        f"{authoritative_compliance}\n"
+        "General compliance knowledge is not evidence of a mapping for this "
+        "finding. If a requested framework is absent above, say AntiFine has "
+        "no supplied mapping for that framework and do not name a control.\n\n"
         "BOUNDED CONVERSATION HISTORY (prior turns; not authoritative)\n"
         f"{history_text}\n\n"
         f"CURRENT QUESTION\n{sanitize_text(question, limit=4000)}\n\n"

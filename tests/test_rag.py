@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 from src.ai.context_builder import build_context
-from src.ai.retriever import Retriever
+from src.ai.retriever import KnowledgeChunk, Retriever
 from src.api.server import AIAskRequest, ask_ai
 from src.models.ai_context import (
     AIComplianceContext,
@@ -153,6 +153,69 @@ class RagTests(unittest.TestCase):
         self.assertIn("Compliance mappings are an allowlist", rendered)
         self.assertIn("do not add or infer another framework", rendered)
         self.assertIn("general guidance", rendered)
+
+    def test_finding_compliance_is_explicit_allowlist(self) -> None:
+        context = AIContext(
+            source="finding",
+            finding=AIFindingContext(
+                rule_id="TF-AWS-004",
+                frameworks=["CIS AWS Foundations Benchmark 5.2"],
+            ),
+        )
+        rendered = build_context("Does it affect PCI-DSS?", [], structured_context=context)
+        self.assertIn("AUTHORITATIVE FINDING COMPLIANCE (allowlist)", rendered)
+        self.assertIn("CIS AWS Foundations Benchmark 5.2", rendered)
+        self.assertIn("no supplied mapping for that framework", rendered)
+        self.assertNotIn("PCI-DSS Requirement", rendered)
+
+    def test_finding_retrieval_excludes_unattached_framework_documents(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "index.json"
+            path.write_text(
+                '{"version": 1, "chunks": ['
+                '{"id":"doc:pci:0","source":"docs/ai/pci.md","title":"PCI-DSS",'
+                '"rule_id":null,"technology":null,"frameworks":[],"text":"PCI-DSS Requirement 1.3.1"},'
+                '{"id":"rule:TF-AWS-004","source":"rules.json","title":"SSH exposure",'
+                '"rule_id":"TF-AWS-004","technology":"terraform",'
+                '"frameworks":["CIS AWS Foundations Benchmark 5.2"],'
+                '"text":"CIS AWS Foundations Benchmark 5.2"}]}',
+                encoding="utf-8",
+            )
+            results = Retriever(path).retrieve(
+                "Does it affect PCI-DSS? TF-AWS-004",
+                authoritative_rule_id="TF-AWS-004",
+                authoritative_frameworks=["CIS AWS Foundations Benchmark 5.2"],
+            )
+        self.assertTrue(results)
+        self.assertTrue(all(result.rule_id == "TF-AWS-004" for result in results))
+
+    def test_supplied_pci_mapping_remains_available(self) -> None:
+        context = AIContext(
+            source="finding",
+            finding=AIFindingContext(
+                rule_id="TF-AWS-004",
+                frameworks=["CIS AWS Foundations Benchmark 5.2", "PCI-DSS 4.0"],
+            ),
+        )
+        rendered = build_context("Does it affect PCI-DSS?", [], structured_context=context)
+        self.assertIn("PCI-DSS 4.0", rendered)
+
+    def test_rule_metadata_cannot_add_frameworks_to_finding_context(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "index.json"
+            path.write_text(
+                '{"version": 1, "chunks": [{"id":"rule:TF-AWS-004",'
+                '"source":"rules.json","title":"SSH exposure","rule_id":"TF-AWS-004",'
+                '"technology":"terraform","frameworks":["CIS AWS Foundations Benchmark 5.2",'
+                '"PCI-DSS 4.0 Req 1.3.1"],"text":"PCI-DSS Requirement 1.3.1"}]}',
+                encoding="utf-8",
+            )
+            results = Retriever(path).retrieve(
+                "Does it affect PCI-DSS? TF-AWS-004",
+                authoritative_rule_id="TF-AWS-004",
+                authoritative_frameworks=["CIS AWS Foundations Benchmark 5.2"],
+            )
+        self.assertEqual(results, [])
 
     def test_follow_up_preserves_bounded_conversation_history(self) -> None:
         history = [

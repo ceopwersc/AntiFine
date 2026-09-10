@@ -116,12 +116,20 @@ class Retriever:
             self._chunks = tuple(self.build_index())
         return self._chunks
 
-    def retrieve(self, query: str, top_k: int = 5) -> list[KnowledgeChunk]:
+    def retrieve(
+        self,
+        query: str,
+        top_k: int = 5,
+        *,
+        authoritative_rule_id: str | None = None,
+        authoritative_frameworks: list[str] | None = None,
+    ) -> list[KnowledgeChunk]:
         if top_k <= 0 or not query.strip():
             return []
         query = sanitize_text(query, limit=4000)
         query_terms = _tokens(query)
         chunks = self._load_index()
+        allowed_frameworks = {item.lower() for item in (authoritative_frameworks or [])}
         scored: list[tuple[int, int, KnowledgeChunk]] = []
         for position, chunk in enumerate(chunks):
             searchable = " ".join((
@@ -132,6 +140,21 @@ class Retriever:
                 " ".join(chunk.frameworks),
                 chunk.text,
             )).lower()
+            if authoritative_rule_id and chunk.rule_id != authoritative_rule_id:
+                if not (chunk.rule_id is None and chunk.frameworks):
+                    continue
+            if authoritative_frameworks is not None:
+                chunk_frameworks = {item.lower() for item in chunk.frameworks}
+                if chunk_frameworks and not chunk_frameworks.issubset(allowed_frameworks):
+                    continue
+                requested_terms = {"pci", "nist", "iso", "hipaa", "gdpr", "soc", "cis"}
+                if (
+                    query_terms.intersection(requested_terms)
+                    and any(term in searchable for term in query_terms.intersection(requested_terms))
+                    and not any(framework in searchable for framework in allowed_frameworks)
+                    and not chunk.rule_id
+                ):
+                    continue
             score = len(query_terms & _tokens(searchable))
             if chunk.rule_id and chunk.rule_id.lower() in query.lower():
                 score += 100
@@ -146,8 +169,19 @@ class Retriever:
 _RETRIEVER = Retriever()
 
 
-def retrieve(query: str, top_k: int = 5) -> list[KnowledgeChunk]:
-    return _RETRIEVER.retrieve(query, top_k)
+def retrieve(
+    query: str,
+    top_k: int = 5,
+    *,
+    authoritative_rule_id: str | None = None,
+    authoritative_frameworks: list[str] | None = None,
+) -> list[KnowledgeChunk]:
+    return _RETRIEVER.retrieve(
+        query,
+        top_k,
+        authoritative_rule_id=authoritative_rule_id,
+        authoritative_frameworks=authoritative_frameworks,
+    )
 
 
 def build_index() -> list[KnowledgeChunk]:
