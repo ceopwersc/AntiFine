@@ -47,6 +47,7 @@ from src.services.remediation_explanation import (
 from src.ai.knowledge_service import find_rule_for_finding
 from src.ai.context_builder import (
     build_context,
+    unmapped_compliance_fallback,
     sanitize_unmapped_compliance_claims,
     source_metadata,
 )
@@ -433,11 +434,9 @@ async def ask_ai(req: AIAskRequest) -> Dict[str, Any]:
             ),
             system_prompt=GENERAL_SYSTEM_PROMPT,
         )
-        answer = sanitize_unmapped_compliance_claims(
-            answer,
-            req.question,
-            req.context,
-            retrieved,
+        fallback = unmapped_compliance_fallback(req.question, req.context, retrieved)
+        answer = fallback or sanitize_unmapped_compliance_claims(
+            answer, req.question, req.context, retrieved
         )
         return {
             "answer": answer,

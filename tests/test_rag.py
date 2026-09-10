@@ -9,7 +9,12 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
-from src.ai.context_builder import build_context, sanitize_unmapped_compliance_claims
+from src.ai.context_builder import (
+    build_context,
+    determine_compliance_status,
+    sanitize_unmapped_compliance_claims,
+    unmapped_compliance_fallback,
+)
 from src.ai.retriever import KnowledgeChunk, Retriever
 from src.api.server import AIAskRequest, ask_ai
 from src.models.ai_context import (
@@ -266,7 +271,66 @@ class RagTests(unittest.TestCase):
         with patch("src.api.server.OllamaService", return_value=service):
             response = asyncio.run(ask_ai(request))
         self.assertNotIn("PCI-DSS Requirement 6.2.2", response["answer"])
-        self.assertIn("no supplied mapping for PCI-DSS", response["answer"])
+        self.assertIn("No PCI-DSS mapping is supplied", response["answer"])
+
+    def test_unmapped_compliance_status_and_deterministic_fallback(self) -> None:
+        context = AIContext(
+            source="finding",
+            finding=AIFindingContext(
+                rule_id="TF-AWS-004",
+                frameworks=["CIS AWS Foundations Benchmark 5.2"],
+            ),
+        )
+        status, framework = determine_compliance_status(
+            "Does it affect PCI-DSS?", context, []
+        )
+        self.assertEqual((status, framework), ("not_mapped", "PCI-DSS"))
+        fallback = unmapped_compliance_fallback(
+            "Does it affect PCI-DSS?", context, []
+        )
+        self.assertIn("No PCI-DSS mapping is supplied", fallback)
+        self.assertNotIn("Requirement", fallback)
+
+    def test_unmapped_question_does_not_use_generic_retrieved_compliance_source(self) -> None:
+        context = AIContext(
+            source="finding",
+            finding=AIFindingContext(
+                rule_id="TF-AWS-004",
+                frameworks=["CIS AWS Foundations Benchmark 5.2"],
+            ),
+        )
+        generic_source = KnowledgeChunk(
+            id="doc:pci",
+            source="docs/ai/compliance.md",
+            title="PCI-DSS",
+            rule_id=None,
+            technology=None,
+            frameworks=(),
+            text="PCI-DSS Requirement 6.2.2",
+        )
+        status, _ = determine_compliance_status(
+            "Does it affect PCI-DSS?", context, [generic_source]
+        )
+        self.assertEqual(status, "not_mapped")
+        self.assertIn(
+            "No PCI-DSS mapping is supplied",
+            unmapped_compliance_fallback(
+                "Does it affect PCI-DSS?", context, [generic_source]
+            ),
+        )
+
+    def test_mapped_compliance_status_allows_supplied_mapping(self) -> None:
+        context = AIContext(
+            source="finding",
+            finding=AIFindingContext(
+                rule_id="TF-AWS-004",
+                frameworks=["CIS AWS Foundations Benchmark 5.2", "PCI-DSS 4.0"],
+            ),
+        )
+        status, framework = determine_compliance_status(
+            "Does it affect PCI-DSS?", context, []
+        )
+        self.assertEqual((status, framework), ("mapped", "PCI-DSS"))
 
     def test_follow_up_preserves_bounded_conversation_history(self) -> None:
         history = [

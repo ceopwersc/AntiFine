@@ -28,6 +28,7 @@ _FRAMEWORK_EXPRESSIONS = {
     "GDPR": r"GDPR",
     "SOC 2": r"SOC[\s-]*2",
 }
+_GENERIC_COMPLIANCE_TERMS = {"security", "compliance", "impact", "this", "it"}
 
 
 def _value(value: object, limit: int = 1200) -> str:
@@ -144,6 +145,60 @@ def requested_unmapped_frameworks(
     ]
 
 
+def requested_framework(question: str) -> str | None:
+    """Extract a framework named in a compliance-oriented question."""
+    for name, pattern in _FRAMEWORK_PATTERNS.items():
+        if pattern.search(question):
+            return name
+    match = re.search(
+        r"(?i)\b(?:affect|impact|map(?:ped)? to|align(?:ed)? with)\s+"
+        r"([A-Za-z][A-Za-z0-9 ._-]{1,40}?)(?:\?|$)",
+        question.strip(),
+    )
+    if not match:
+        return None
+    candidate = match.group(1).strip(" ._-")
+    return None if candidate.lower() in _GENERIC_COMPLIANCE_TERMS else candidate
+
+
+def determine_compliance_status(
+    question: str,
+    context: AIContext | str | None,
+    retrieved: list[KnowledgeChunk],
+) -> tuple[str, str | None]:
+    """Classify compliance evidence for a contextual finding question."""
+    if not isinstance(context, AIContext) or context.source != "finding" or not context.finding:
+        return "unknown", requested_framework(question)
+    requested = requested_framework(question)
+    if not requested:
+        return "unknown", None
+    authoritative = " ".join(context.finding.frameworks).lower()
+    retrieved_frameworks = " ".join(
+        framework for chunk in retrieved for framework in chunk.frameworks
+    ).lower()
+    if requested.lower() in authoritative or requested.lower() in retrieved_frameworks:
+        return "mapped", requested
+    return "not_mapped", requested
+
+
+def unmapped_compliance_fallback(
+    question: str,
+    context: AIContext | str | None,
+    retrieved: list[KnowledgeChunk],
+) -> str | None:
+    """Return a safe deterministic answer for an unmapped framework question."""
+    status, framework = determine_compliance_status(question, context, retrieved)
+    if status != "not_mapped" or not isinstance(context, AIContext) or not context.finding:
+        return None
+    mappings = ", ".join(context.finding.frameworks) or "no framework mappings"
+    rule_id = context.finding.rule_id or "this finding"
+    return (
+        f"AntiFine maps {rule_id} to {mappings}. No {framework} mapping is "
+        "supplied for this finding, so AntiFine cannot determine its impact "
+        "from the available evidence."
+    )
+
+
 def sanitize_unmapped_compliance_claims(
     answer: str,
     question: str,
@@ -200,6 +255,11 @@ def build_context(
             )
         elif finding_context:
             authoritative_compliance = "No framework mappings supplied for this finding"
+    compliance_status, compliance_framework = determine_compliance_status(
+        question,
+        structured_context,
+        retrieved,
+    )
     history = messages[-MAX_MESSAGES:] if messages else []
     history_text = "\n".join(
         f"{message.role.upper()}: {sanitize_text(message.content, limit=MAX_MESSAGE_CHARS)}"
@@ -213,6 +273,8 @@ def build_context(
         f"{supplied_context}\n\n"
         "AUTHORITATIVE FINDING COMPLIANCE (allowlist)\n"
         f"{authoritative_compliance}\n"
+        f"Compliance status: {compliance_status}\n"
+        f"Requested framework: {compliance_framework or 'None detected'}\n"
         "General compliance knowledge is not evidence of a mapping for this "
         "finding. If a requested framework is absent above, say AntiFine has "
         "no supplied mapping for that framework and do not name a control.\n\n"
@@ -226,7 +288,11 @@ def build_context(
         "framework or control. If the retrieved context does not answer the "
         "question, say: \"I don't have enough AntiFine-specific information "
         "to determine that.\" General security guidance must be labelled "
-        "general guidance."
+        "general guidance.\n"
+        "If compliance status is not_mapped, do not provide framework-specific "
+        "requirements, controls, identifiers, names, interpretations, or "
+        "recommendations. State only that AntiFine has no supplied mapping; "
+        "generic security guidance must not mention that framework."
     )
     return context[:MAX_CONTEXT]
 
