@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from src.ai.retriever import KnowledgeChunk
 from src.models.finding import Finding
 from src.models.ai_context import AIContext, AIMessage
@@ -10,6 +12,22 @@ from src.services.ai_explanation import sanitize_text
 MAX_CONTEXT = 12000
 MAX_MESSAGES = 10
 MAX_MESSAGE_CHARS = 1200
+_FRAMEWORK_PATTERNS = {
+    "PCI-DSS": re.compile(r"(?i)\bPCI[\s-]*DSS\b"),
+    "NIST": re.compile(r"(?i)\bNIST\b"),
+    "ISO 27001": re.compile(r"(?i)\bISO[\s-]*27001\b"),
+    "HIPAA": re.compile(r"(?i)\bHIPAA\b"),
+    "GDPR": re.compile(r"(?i)\bGDPR\b"),
+    "SOC 2": re.compile(r"(?i)\bSOC[\s-]*2\b"),
+}
+_FRAMEWORK_EXPRESSIONS = {
+    "PCI-DSS": r"PCI[\s-]*DSS",
+    "NIST": r"NIST",
+    "ISO 27001": r"ISO[\s-]*27001",
+    "HIPAA": r"HIPAA",
+    "GDPR": r"GDPR",
+    "SOC 2": r"SOC[\s-]*2",
+}
 
 
 def _value(value: object, limit: int = 1200) -> str:
@@ -104,6 +122,49 @@ def format_ai_context(context: AIContext | str | None) -> tuple[str, str]:
             )
         )
     return context.source, "\n".join(sections)[:5000] or "None supplied"
+
+
+def requested_unmapped_frameworks(
+    question: str,
+    context: AIContext | str | None,
+    retrieved: list[KnowledgeChunk],
+) -> list[str]:
+    """Return named frameworks that are not authoritative for a finding."""
+    if not isinstance(context, AIContext) or context.source != "finding" or not context.finding:
+        return []
+    authoritative = " ".join(context.finding.frameworks).lower()
+    retrieved_frameworks = " ".join(
+        framework for chunk in retrieved for framework in chunk.frameworks
+    ).lower()
+    return [
+        name for name, pattern in _FRAMEWORK_PATTERNS.items()
+        if pattern.search(question)
+        and name.lower() not in authoritative
+        and name.lower() not in retrieved_frameworks
+    ]
+
+
+def sanitize_unmapped_compliance_claims(
+    answer: str,
+    question: str,
+    context: AIContext | str | None,
+    retrieved: list[KnowledgeChunk],
+) -> str:
+    """Remove framework control identifiers when the finding has no mapping."""
+    unmapped = requested_unmapped_frameworks(question, context, retrieved)
+    if not unmapped:
+        return answer
+    sanitized = answer
+    for framework in unmapped:
+        expression = _FRAMEWORK_EXPRESSIONS[framework]
+        sanitized = re.sub(
+            rf"(?i)\b{expression}\b(?:\s+(?:v?\d+(?:\.\d+)?))?"
+            rf"(?:\s+(?:Requirement|Req(?:uirement)?|Control))?\s+\d+(?:\.\d+){{1,3}}\b",
+            framework,
+            sanitized,
+        )
+    note = "; ".join(f"AntiFine has no supplied mapping for {framework}" for framework in unmapped)
+    return f"{sanitized.rstrip()}\n\n{note}."
 
 
 def build_context(

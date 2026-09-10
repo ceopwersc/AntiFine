@@ -45,7 +45,11 @@ from src.services.remediation_explanation import (
     build_remediation_review_prompt,
 )
 from src.ai.knowledge_service import find_rule_for_finding
-from src.ai.context_builder import build_context, source_metadata
+from src.ai.context_builder import (
+    build_context,
+    sanitize_unmapped_compliance_claims,
+    source_metadata,
+)
 from src.ai.prompts import EXPLANATION_SYSTEM_PROMPT, GENERAL_SYSTEM_PROMPT
 from src.ai.retriever import retrieve
 
@@ -428,6 +432,12 @@ async def ask_ai(req: AIAskRequest) -> Dict[str, Any]:
                 messages=req.messages,
             ),
             system_prompt=GENERAL_SYSTEM_PROMPT,
+        )
+        answer = sanitize_unmapped_compliance_claims(
+            answer,
+            req.question,
+            req.context,
+            retrieved,
         )
         return {
             "answer": answer,

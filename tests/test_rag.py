@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
-from src.ai.context_builder import build_context
+from src.ai.context_builder import build_context, sanitize_unmapped_compliance_claims
 from src.ai.retriever import KnowledgeChunk, Retriever
 from src.api.server import AIAskRequest, ask_ai
 from src.models.ai_context import (
@@ -216,6 +216,57 @@ class RagTests(unittest.TestCase):
                 authoritative_frameworks=["CIS AWS Foundations Benchmark 5.2"],
             )
         self.assertEqual(results, [])
+
+    def test_unmapped_framework_answer_cannot_contain_control_numbers(self) -> None:
+        context = AIContext(
+            source="finding",
+            finding=AIFindingContext(
+                rule_id="TF-AWS-004",
+                frameworks=["CIS AWS Foundations Benchmark 5.2"],
+            ),
+        )
+        answer = sanitize_unmapped_compliance_claims(
+            "No mapping was supplied, but PCI-DSS Requirement 6.2.2 and PCI-DSS 6.5.2 may apply.",
+            "Does it affect PCI-DSS?",
+            context,
+            [],
+        )
+        self.assertNotIn("PCI-DSS Requirement 6.2.2", answer)
+        self.assertNotIn("PCI-DSS 6.5.2", answer)
+        self.assertIn("no supplied mapping for PCI-DSS", answer)
+
+    def test_mapped_framework_answer_is_not_rewritten(self) -> None:
+        context = AIContext(
+            source="finding",
+            finding=AIFindingContext(frameworks=["PCI-DSS 4.0 Requirement 1.3.1"]),
+        )
+        answer = "AntiFine maps this to PCI-DSS 4.0 Requirement 1.3.1."
+        self.assertEqual(
+            sanitize_unmapped_compliance_claims(answer, "Does it affect PCI-DSS?", context, []),
+            answer,
+        )
+
+    def test_endpoint_sanitizes_unmapped_framework_controls(self) -> None:
+        service = type("Service", (), {
+            "config": type("Config", (), {"model": "qwen2.5:7b"})(),
+            "generate": AsyncMock(
+                return_value="PCI-DSS Requirement 6.2.2 may apply to this finding."
+            ),
+        })()
+        request = AIAskRequest(
+            question="Does it affect PCI-DSS?",
+            context=AIContext(
+                source="finding",
+                finding=AIFindingContext(
+                    rule_id="TF-AWS-004",
+                    frameworks=["CIS AWS Foundations Benchmark 5.2"],
+                ),
+            ),
+        )
+        with patch("src.api.server.OllamaService", return_value=service):
+            response = asyncio.run(ask_ai(request))
+        self.assertNotIn("PCI-DSS Requirement 6.2.2", response["answer"])
+        self.assertIn("no supplied mapping for PCI-DSS", response["answer"])
 
     def test_follow_up_preserves_bounded_conversation_history(self) -> None:
         history = [
