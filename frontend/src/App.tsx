@@ -3,7 +3,6 @@ import { AnimatePresence, motion } from 'framer-motion';
 import {
   Activity,
   AlertTriangle,
-  ArrowDownRight,
   ArrowUpRight,
   Bell,
   BookOpen,
@@ -16,12 +15,10 @@ import {
   Clock3,
   Code2,
   Copy,
-  Database,
   Download,
   FileCheck2,
   FileCode2,
   FileText,
-  Filter,
   GitBranch,
   KeyRound,
   LayoutDashboard,
@@ -33,7 +30,6 @@ import {
   RefreshCw,
   Search,
   Settings2,
-  Shield,
   ShieldAlert,
   ShieldCheck,
   SlidersHorizontal,
@@ -45,7 +41,6 @@ import {
   X,
 } from 'lucide-react';
 import { askAntiFine, explainFinding, explainRemediation, fetchAIHealth, generateReport, remediateFinding, runScan, type AskContext, type AskMessage, type AskResponse, type FindingExplanation, type RemediationExplanation } from './api';
-import { Area, AreaChart, ResponsiveContainer, Tooltip } from 'recharts';
 
 type Severity = 'Critical' | 'High' | 'Medium' | 'Low';
 type Page = 'overview' | 'scan' | 'findings' | 'compliance' | 'secrets' | 'history' | 'reports' | 'ai';
@@ -235,8 +230,8 @@ function AppShell({
           <span className="brand-beta">BETA</span>
         </div>
         <div className="workspace-switcher">
-          <div className="workspace-icon">AC</div>
-          <div><strong>Acme Cloud</strong><small>production</small></div>
+          <div className="workspace-icon">AF</div>
+          <div><strong>AntiFine</strong><small>LOCAL WORKSPACE</small></div>
           <ChevronDown size={14} className="muted" />
         </div>
         <nav className="side-nav" aria-label="Primary navigation">
@@ -267,7 +262,7 @@ function AppShell({
         <header className="topbar">
           <div className="topbar-title"><button className="mobile-menu" aria-label="Open navigation" onClick={() => setMobileOpen(true)}><Menu size={20} /></button><span>Workspace</span><ChevronRight size={14} className="muted" /><strong>{currentLabel}</strong></div>
           <div className="topbar-actions">
-            <div className="environment"><span className="status-live" />Production</div>
+            <div className="environment"><span className="status-live" />FastAPI · 127.0.0.1:8000 <span className="environment-divider">·</span> Ollama · Local</div>
             <button className="icon-button" aria-label="Help"><CircleHelp size={18} /></button>
             <button className="icon-button notification-button" aria-label="Notifications"><Bell size={18} /><span /></button>
             <div className="top-avatar">RS</div>
@@ -283,40 +278,23 @@ function PageHeader({ eyebrow, title, description, action }: { eyebrow?: string;
   return <div className="page-header"><div><div className="eyebrow">{eyebrow ?? 'Security posture'}</div><h1>{title}</h1>{description && <p>{description}</p>}</div>{action}</div>;
 }
 
-function StatCard({ label, value, detail, trend, icon: Icon, tone = 'blue' }: { label: string; value: string; detail: string; trend?: 'up' | 'down'; icon: typeof Shield; tone?: string }) {
-  return <div className={`stat-card stat-${tone}`}><div className="stat-card-top"><span>{label}</span><div className="stat-icon"><Icon size={17} /></div></div><div className="stat-value">{value}</div><div className={`stat-detail ${trend === 'up' ? 'trend-up' : trend === 'down' ? 'trend-down' : ''}`}>{trend === 'up' ? <ArrowUpRight size={14} /> : trend === 'down' ? <ArrowDownRight size={14} /> : null}{detail}</div></div>;
-}
-
 function Overview({ findings, onNavigate, onSelect }: { findings: Finding[]; onNavigate: (page: Page) => void; onSelect: (finding: Finding) => void }) {
   const counts = useMemo(() => findings.reduce<Record<Severity, number>>((acc, finding) => { acc[finding.severity] += 1; return acc; }, { Critical: 0, High: 0, Medium: 0, Low: 0 }), [findings]);
-  const chart = [
-    { label: 'Aug 12', score: 64 }, { label: 'Aug 14', score: 58 }, { label: 'Aug 16', score: 69 },
-    { label: 'Aug 19', score: 62 }, { label: 'Aug 21', score: 75 }, { label: 'Aug 23', score: 71 },
-    { label: 'Aug 26', score: 82 }, { label: 'Aug 28', score: 79 }, { label: 'Aug 30', score: 88 },
-    { label: 'Sep 02', score: 84 }, { label: 'Sep 06', score: 91 }, { label: 'Today', score: 89 },
-  ];
-  return <div className="content-stack">
-    <PageHeader eyebrow="Thursday, September 10, 2026" title="Good morning, Rashi" description="Here's the latest security posture across your infrastructure." action={<button className="button button-primary" onClick={() => onNavigate('scan')}><Play size={15} fill="currentColor" />Run a scan</button>} />
-    <section className="dashboard-hero panel">
-      <div className="grade-card">
-        <div className="grade-card-label">Current security grade</div>
-        <div className="grade-card-main"><strong>B</strong><div><span>84 / 100</span><small><ArrowUpRight size={13} /> 6.2% from last week</small></div></div>
-        <p>Strong baseline with a small number of high-priority findings requiring review.</p>
-      </div>
-      <div className="grade-card-note"><ShieldCheck size={17} /><span>Deterministic scan result</span><small>Last scan 12 min ago</small></div>
+  return <div className="content-stack workstation-overview">
+    <PageHeader eyebrow="Local workspace" title="Overview" description="Current scan state and findings requiring engineering review." action={<button className="button button-primary" onClick={() => onNavigate('scan')}><Play size={14} fill="currentColor" />Run scan</button>} />
+    <section className="ops-strip" aria-label="Operational state">
+      <div><span className="ops-label">LAST SCAN</span><strong>IaC Config Audit</strong><code>scan_8f31c2</code><span>12 min ago</span></div>
+      <div><span className="ops-label">ENGINE</span><strong className="state-ok">COMPLETE</strong><span>128 files · 6 findings</span></div>
+      <div><span className="ops-label">SERVICES</span><span className="service-state"><i />FastAPI · 127.0.0.1:8000</span><span className="service-state"><i />Ollama · Local</span></div>
     </section>
-    <div className="stat-grid dashboard-kpis">
-      <StatCard label="Critical" value={String(counts.Critical)} detail="Immediate attention" icon={ShieldAlert} tone="red" />
-      <StatCard label="High" value={String(counts.High)} detail="Prioritize this week" icon={ShieldAlert} tone="orange" />
-      <StatCard label="Secrets" value="2" detail="Both need attention" trend="down" icon={KeyRound} tone="red" />
-      <StatCard label="Files scanned" value="128" detail="Across 6 repositories" icon={Database} tone="blue" />
-      <StatCard label="Remediated" value="24" detail="This month" trend="up" icon={Check} tone="green" />
+    <section className="overview-findings panel">
+      <div className="console-heading"><div><span className="section-kicker">WORK QUEUE</span><h2>Open findings</h2></div><div className="console-summary"><span className="severity-count critical">{counts.Critical} critical</span><span className="severity-count high">{counts.High} high</span><button className="text-button" onClick={() => onNavigate('findings')}>Open findings <ArrowUpRight size={13} /></button></div></div>
+      <div className="overview-finding-list">{findings.filter((finding) => finding.status === 'Open').slice(0, 5).map((finding) => <button className="overview-finding-row" key={finding.id} onClick={() => onSelect(finding)}><SeverityBadge severity={finding.severity} /><code className="rule-id">{finding.id}</code><strong>{finding.rule_name}</strong><span className="file-ref">{finding.file}:{finding.line}</span><span className="framework-ref">{finding.framework}</span><ChevronRight size={14} /></button>)}</div>
+    </section>
+    <div className="overview-lower-grid">
+      <section className="console-panel"><div className="console-heading"><div><span className="section-kicker">SCAN STATE</span><h2>Latest activity</h2></div><button className="text-button" onClick={() => onNavigate('history')}>History <ArrowUpRight size={13} /></button></div><div className="activity-list compact-activity"><div className="activity-row"><div className="activity-status success"><Check size={13} /></div><div><strong>IaC audit completed</strong><span>6 findings · deterministic engine</span></div><time>12 min ago</time></div><div className="activity-row"><div className="activity-status"><GitBranch size={13} /></div><div><strong>Repository scan ready</strong><span>Local workspace · read-only</span></div><time>2 hr ago</time></div></div></section>
+      <section className="console-panel"><div className="console-heading"><div><span className="section-kicker">SEVERITY</span><h2>Finding distribution</h2></div><button className="text-button" onClick={() => onNavigate('findings')}>Filter <ArrowUpRight size={13} /></button></div><div className="severity-console">{(['Critical', 'High', 'Medium', 'Low'] as Severity[]).map((severity) => <button key={severity} onClick={() => onNavigate('findings')}><SeverityBadge severity={severity} /><strong>{counts[severity]}</strong><span>{severity === 'Critical' ? 'immediate review' : severity === 'High' ? 'priority queue' : 'remaining queue'}</span></button>)}</div></section>
     </div>
-    <div className="overview-grid">
-      <section className="panel posture-panel"><div className="panel-heading"><div><h2>Security posture</h2><p>Composite score across the last 30 days</p></div><button className="select-button">Last 30 days <ChevronDown size={14} /></button></div><div className="posture-chart"><div className="score-ring"><div><strong>84</strong><span>/ 100</span><small>Good</small></div></div><div className="chart-area"><div className="chart-y-labels"><span>100</span><span>75</span><span>50</span><span>25</span></div><div className="line-chart"><ResponsiveContainer width="100%" height="100%"><AreaChart data={chart} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}><defs><linearGradient id="postureFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#5ba7ff" stopOpacity={0.3} /><stop offset="100%" stopColor="#5ba7ff" stopOpacity={0} /></linearGradient></defs><Area type="monotone" dataKey="score" stroke="#65afff" strokeWidth={2} fill="url(#postureFill)" dot={false} /><Tooltip contentStyle={{ background: '#172433', border: '1px solid #35516e', borderRadius: 5, color: '#dbeafa', fontSize: 10 }} labelStyle={{ color: '#8fa6bf' }} formatter={(value) => [`${value}`, 'Score']} /></AreaChart></ResponsiveContainer></div></div></div><div className="chart-legend"><span><i className="legend-dot blue" />Score</span><span className="chart-note"><ArrowUpRight size={13} /> 6.2% vs previous period</span></div></section>
-      <section className="panel severity-panel"><div className="panel-heading"><div><h2>Findings by severity</h2><p>Prioritize what needs attention</p></div><button className="icon-button"><MoreHorizontal size={18} /></button></div><div className="severity-list">{(['Critical', 'High', 'Medium', 'Low'] as Severity[]).map((severity) => <button className="severity-row" key={severity} onClick={() => onNavigate('findings')}><div className="severity-row-label"><SeverityBadge severity={severity} /><strong>{counts[severity]}</strong></div><div className="severity-track"><div className={`severity-progress ${severity.toLowerCase()}`} style={{ width: `${Math.max(counts[severity] * 13, 8)}%` }} /></div><ChevronRight size={15} className="muted" /></button>)}</div><button className="text-button" onClick={() => onNavigate('findings')}>View all findings <ArrowUpRight size={14} /></button></section>
-    </div>
-    <div className="overview-grid lower-grid"><section className="panel"><div className="panel-heading"><div><h2>Recent findings</h2><p>Detected in the latest scan</p></div><button className="text-button" onClick={() => onNavigate('findings')}>View all <ArrowUpRight size={14} /></button></div><div className="recent-list">{findings.slice(0, 4).map((finding) => <button className="recent-row" key={finding.id} onClick={() => onSelect(finding)}><div className={`finding-icon ${finding.severity.toLowerCase()}`}><ShieldAlert size={16} /></div><div className="recent-main"><strong>{finding.rule_name}</strong><span>{finding.file}:{finding.line}</span></div><SeverityBadge severity={finding.severity} /><span className="recent-time">{finding.detected}</span><ChevronRight size={15} className="muted" /></button>)}</div></section><section className="panel activity-panel"><div className="panel-heading"><div><h2>Scan activity</h2><p>Latest runs across your workspace</p></div><button className="icon-button"><MoreHorizontal size={18} /></button></div><div className="activity-list"><div className="activity-row"><div className="activity-status success"><Check size={14} /></div><div><strong>IaC audit completed</strong><span>acme-infrastructure · 6 findings</span></div><time>12 min ago</time></div><div className="activity-row"><div className="activity-status"><GitBranch size={14} /></div><div><strong>Pull request scanned</strong><span>acme/web · #418</span></div><time>2 hr ago</time></div><div className="activity-row"><div className="activity-status success"><Check size={14} /></div><div><strong>Secret rotation verified</strong><span>production / AWS</span></div><time>Yesterday</time></div></div><button className="text-button" onClick={() => onNavigate('history')}>Open scan history <ArrowUpRight size={14} /></button></section></div>
   </div>;
 }
 
@@ -360,7 +338,7 @@ function FindingsPage({ findings, onSelect }: { findings: Finding[]; onSelect: (
   const [severity, setSeverity] = useState<Severity | 'All'>('All');
   const [status, setStatus] = useState<'All' | Finding['status']>('All');
   const filtered = findings.filter((finding) => (severity === 'All' || finding.severity === severity) && (status === 'All' || finding.status === status) && `${finding.rule_name} ${finding.file} ${finding.frameworks.join(' ')}`.toLowerCase().includes(query.toLowerCase()));
-  return <div className="content-stack"><PageHeader eyebrow="Security posture" title="Findings" description="Review, prioritize, and remediate issues discovered across your infrastructure." action={<button className="button button-secondary"><Download size={15} />Export CSV</button>} /><div className="finding-toolbar"><div className="search-input"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search findings, files, or frameworks" /><kbd>⌘ K</kbd></div><div className="filter-group"><SlidersHorizontal size={15} className="muted" /><select value={severity} onChange={(event) => setSeverity(event.target.value as Severity | 'All')} aria-label="Filter by severity"><option value="All">All severities</option><option>Critical</option><option>High</option><option>Medium</option><option>Low</option></select><select value={status} onChange={(event) => setStatus(event.target.value as 'All' | Finding['status'])} aria-label="Filter by status"><option value="All">All status</option><option>Open</option><option>Fixed</option><option>Accepted</option></select><button className="icon-button" aria-label="More filters"><Filter size={16} /></button></div></div><div className="panel table-panel"><div className="table-meta"><span><strong>{filtered.length}</strong> findings</span><span>Last scan 12 min ago · <span className="live-text">Live data</span></span></div><div className="table-scroll"><table className="findings-table"><thead><tr><th>Finding</th><th>Severity</th><th>Location</th><th>Framework</th><th>Status</th><th aria-label="Actions" /></tr></thead><tbody>{filtered.map((finding) => <tr key={finding.id} onClick={() => onSelect(finding)}><td><div className="finding-cell"><div className={`finding-icon ${finding.severity.toLowerCase()}`}><ShieldAlert size={15} /></div><div><strong>{finding.rule_name}</strong><span>{finding.id}</span></div></div></td><td><SeverityBadge severity={finding.severity} /></td><td><code>{finding.file}</code><span className="line-number">:{finding.line}</span></td><td><span className="framework-pill">{finding.framework}</span></td><td><span className={`status-badge ${finding.status.toLowerCase()}`}><span />{finding.status}</span></td><td><ChevronRight size={16} className="muted" /></td></tr>)}</tbody></table></div>{filtered.length === 0 && <div className="empty-state"><Search size={24} /><strong>No findings match these filters</strong><span>Try a different search or reset the filters.</span></div>}<div className="table-footer"><span>Showing {filtered.length} of {findings.length}</span><div><button className="pagination-button" disabled>Previous</button><button className="pagination-button active">1</button><button className="pagination-button">Next</button></div></div></div></div>;
+  return <div className="content-stack workstation-findings"><PageHeader eyebrow="Finding queue" title="Findings" description="Deterministic findings, code locations, and review state." action={<button className="button button-secondary"><Download size={14} />Export</button>} /><div className="finding-workflow"><span>Finding</span><ChevronRight size={13} /><span>Code</span><ChevronRight size={13} /><span>Rule</span><ChevronRight size={13} /><span>Compliance</span><ChevronRight size={13} /><span>Remediation</span><ChevronRight size={13} /><span>Diff</span><ChevronRight size={13} /><span>Apply</span><ChevronRight size={13} /><span>Rescan</span></div><div className="finding-toolbar"><div className="search-input"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search rule IDs, files, paths, frameworks" /><kbd>⌘ K</kbd></div><div className="filter-group"><SlidersHorizontal size={15} className="muted" /><select value={severity} onChange={(event) => setSeverity(event.target.value as Severity | 'All')} aria-label="Filter by severity"><option value="All">All severities</option><option>Critical</option><option>High</option><option>Medium</option><option>Low</option></select><select value={status} onChange={(event) => setStatus(event.target.value as 'All' | Finding['status'])} aria-label="Filter by status"><option value="All">All status</option><option>Open</option><option>Fixed</option><option>Accepted</option></select></div></div><div className="panel table-panel"><div className="table-meta"><span><strong>{filtered.length}</strong> findings in current scan</span><span><code>scan_8f31c2</code> · <span className="live-text">LOCAL DATA</span></span></div><div className="table-scroll"><table className="findings-table workstation-table"><thead><tr><th>Severity</th><th>Rule / finding</th><th>Code location</th><th>Framework</th><th>Evidence</th><th>Status</th><th aria-label="Actions" /></tr></thead><tbody>{filtered.map((finding) => <tr key={finding.id} onClick={() => onSelect(finding)}><td><SeverityBadge severity={finding.severity} /></td><td><div className="finding-cell"><div><code className="rule-id">{finding.id}</code><strong>{finding.rule_name}</strong></div></div></td><td><code>{finding.file}</code><span className="line-number">:{finding.line}</span><pre className="table-code">{finding.before.split('\n')[0]}</pre></td><td><span className="framework-pill">{finding.framework}</span></td><td><span className="evidence-text">detected {finding.detected}</span></td><td><span className={`status-badge ${finding.status.toLowerCase()}`}><span />{finding.status}</span></td><td><ChevronRight size={15} className="muted" /></td></tr>)}</tbody></table></div>{filtered.length === 0 && <div className="empty-state"><Search size={22} /><strong>No findings match these filters</strong><span>Try a rule ID, file path, or framework.</span></div>}<div className="table-footer"><span>Showing {filtered.length} of {findings.length} · click a row to inspect code and remediation</span><div><button className="pagination-button" disabled>Previous</button><button className="pagination-button active">1</button><button className="pagination-button">Next</button></div></div></div></div>;
 }
 
 function renderExplanation(explanation: string) {
@@ -615,7 +593,7 @@ function SecretsPage() {
 
 function HistoryPage() {
   const scans = [{ id: 'scan_8f31c2', target: 'acme-infrastructure', type: 'IaC Config Audit', findings: 6, status: 'Completed', time: '12 min ago', duration: '18.4s' }, { id: 'scan_3a10b9', target: 'acme/web · PR #418', type: 'IaC Config Audit', findings: 2, status: 'Completed', time: '2 hr ago', duration: '11.2s' }, { id: 'scan_887bc1', target: 'staging ingress', type: 'SSRF Web Audit', findings: 0, status: 'Completed', time: 'Yesterday', duration: '7.8s' }, { id: 'scan_11ac72', target: 'acme-infrastructure', type: 'IaC Config Audit', findings: 8, status: 'Completed', time: 'Sep 08, 2026', duration: '20.1s' }];
-  return <div className="content-stack"><PageHeader eyebrow="Activity" title="Scan history" description="A complete audit trail of scans run in the Acme Cloud workspace." action={<button className="button button-secondary"><Download size={15} />Export history</button>} /><div className="panel table-panel"><div className="table-meta"><span><strong>Recent scans</strong></span><div className="filter-group"><select aria-label="Filter scan type"><option>All scan types</option><option>IaC Config Audit</option><option>SSRF Web Audit</option></select><button className="icon-button" aria-label="Refresh history"><RefreshCw size={15} /></button></div></div><div className="table-scroll"><table className="findings-table history-table"><thead><tr><th>Target</th><th>Scan type</th><th>Findings</th><th>Status</th><th>Run time</th><th /></tr></thead><tbody>{scans.map((scan) => <tr key={scan.id}><td><div className="finding-cell"><div className="finding-icon blue"><GitBranch size={15} /></div><div><strong>{scan.target}</strong><span>{scan.id} · {scan.duration}</span></div></div></td><td><span className="muted">{scan.type}</span></td><td><span className={scan.findings ? 'finding-count' : 'finding-count clean'}>{scan.findings || 'Clean'}</span></td><td><span className="status-badge fixed"><span />{scan.status}</span></td><td>{scan.time}</td><td><ChevronRight size={16} className="muted" /></td></tr>)}</tbody></table></div></div></div>;
+  return <div className="content-stack"><PageHeader eyebrow="Activity" title="Scan history" description="A complete audit trail of local scans." action={<button className="button button-secondary"><Download size={15} />Export history</button>} /><div className="panel table-panel"><div className="table-meta"><span><strong>Recent scans</strong></span><div className="filter-group"><select aria-label="Filter scan type"><option>All scan types</option><option>IaC Config Audit</option><option>SSRF Web Audit</option></select><button className="icon-button" aria-label="Refresh history"><RefreshCw size={15} /></button></div></div><div className="table-scroll"><table className="findings-table history-table"><thead><tr><th>Target</th><th>Scan type</th><th>Findings</th><th>Status</th><th>Run time</th><th /></tr></thead><tbody>{scans.map((scan) => <tr key={scan.id}><td><div className="finding-cell"><div className="finding-icon blue"><GitBranch size={15} /></div><div><strong>{scan.target}</strong><span>{scan.id} · {scan.duration}</span></div></div></td><td><span className="muted">{scan.type}</span></td><td><span className={scan.findings ? 'finding-count' : 'finding-count clean'}>{scan.findings || 'Clean'}</span></td><td><span className="status-badge fixed"><span />{scan.status}</span></td><td>{scan.time}</td><td><ChevronRight size={16} className="muted" /></td></tr>)}</tbody></table></div></div></div>;
 }
 
 function ReportsPage() {
