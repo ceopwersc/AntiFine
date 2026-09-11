@@ -297,11 +297,20 @@ function Overview({ findings, onNavigate, onSelect }: { findings: Finding[]; onN
   ];
   return <div className="content-stack">
     <PageHeader eyebrow="Thursday, September 10, 2026" title="Good morning, Rashi" description="Here's the latest security posture across your infrastructure." action={<button className="button button-primary" onClick={() => onNavigate('scan')}><Play size={15} fill="currentColor" />Run a scan</button>} />
-    <div className="stat-grid">
-      <StatCard label="Security score" value="84" detail="+6.2% from last week" trend="up" icon={ShieldCheck} tone="green" />
-      <StatCard label="Open findings" value={String(findings.length)} detail="2 fewer than yesterday" trend="up" icon={ShieldAlert} tone="orange" />
-      <StatCard label="Assets monitored" value="128" detail="Across 6 repositories" icon={Database} tone="blue" />
-      <StatCard label="Secrets detected" value="2" detail="Both need attention" trend="down" icon={KeyRound} tone="red" />
+    <section className="dashboard-hero panel">
+      <div className="grade-card">
+        <div className="grade-card-label">Current security grade</div>
+        <div className="grade-card-main"><strong>B</strong><div><span>84 / 100</span><small><ArrowUpRight size={13} /> 6.2% from last week</small></div></div>
+        <p>Strong baseline with a small number of high-priority findings requiring review.</p>
+      </div>
+      <div className="grade-card-note"><ShieldCheck size={17} /><span>Deterministic scan result</span><small>Last scan 12 min ago</small></div>
+    </section>
+    <div className="stat-grid dashboard-kpis">
+      <StatCard label="Critical" value={String(counts.Critical)} detail="Immediate attention" icon={ShieldAlert} tone="red" />
+      <StatCard label="High" value={String(counts.High)} detail="Prioritize this week" icon={ShieldAlert} tone="orange" />
+      <StatCard label="Secrets" value="2" detail="Both need attention" trend="down" icon={KeyRound} tone="red" />
+      <StatCard label="Files scanned" value="128" detail="Across 6 repositories" icon={Database} tone="blue" />
+      <StatCard label="Remediated" value="24" detail="This month" trend="up" icon={Check} tone="green" />
     </div>
     <div className="overview-grid">
       <section className="panel posture-panel"><div className="panel-heading"><div><h2>Security posture</h2><p>Composite score across the last 30 days</p></div><button className="select-button">Last 30 days <ChevronDown size={14} /></button></div><div className="posture-chart"><div className="score-ring"><div><strong>84</strong><span>/ 100</span><small>Good</small></div></div><div className="chart-area"><div className="chart-y-labels"><span>100</span><span>75</span><span>50</span><span>25</span></div><div className="line-chart"><ResponsiveContainer width="100%" height="100%"><AreaChart data={chart} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}><defs><linearGradient id="postureFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#5ba7ff" stopOpacity={0.3} /><stop offset="100%" stopColor="#5ba7ff" stopOpacity={0} /></linearGradient></defs><Area type="monotone" dataKey="score" stroke="#65afff" strokeWidth={2} fill="url(#postureFill)" dot={false} /><Tooltip contentStyle={{ background: '#172433', border: '1px solid #35516e', borderRadius: 5, color: '#dbeafa', fontSize: 10 }} labelStyle={{ color: '#8fa6bf' }} formatter={(value) => [`${value}`, 'Score']} /></AreaChart></ResponsiveContainer></div></div></div><div className="chart-legend"><span><i className="legend-dot blue" />Score</span><span className="chart-note"><ArrowUpRight size={13} /> 6.2% vs previous period</span></div></section>
