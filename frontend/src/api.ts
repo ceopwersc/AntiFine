@@ -21,6 +21,65 @@ export interface FindingExplanation {
   generated_locally: boolean;
 }
 
+export interface AIHealth {
+  enabled: boolean;
+  available: boolean;
+  provider: string;
+  model: string;
+  error?: string;
+}
+
+export interface AskSource {
+  title: string;
+  source: string;
+  rule_id?: string | null;
+}
+
+export interface AskResponse {
+  answer: string;
+  model: string;
+  provider: string;
+  sources: AskSource[];
+}
+
+export interface AskContext {
+  finding_id: string;
+  rule_id: string;
+  title: string;
+  severity: string;
+  technology: string;
+  framework: string;
+  code_context?: string;
+}
+
+export interface AskMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export const fetchAIHealth = async (): Promise<AIHealth> => {
+  return (await apiClient.get<AIHealth>('/ai/health')).data;
+};
+
+export const askAntiFine = async (question: string, context?: AskContext, messages: AskMessage[] = []): Promise<AskResponse> => {
+  const response = await apiClient.post<AskResponse>('/ai/ask', {
+    question,
+    context: context ? {
+      source: 'finding',
+      finding: {
+        rule_id: context.rule_id,
+        title: context.title,
+        severity: context.severity,
+        technology: context.technology,
+        file: context.finding_id,
+        frameworks: context.framework ? [context.framework] : [],
+      },
+    } : undefined,
+    messages: messages.slice(-10).map(({ role, content }) => ({ role, content: content.slice(0, 1200) })),
+  });
+  return response.data;
+};
+
 export interface RemediationExplanationRequest {
   finding: ExplainableFinding;
   before: string;

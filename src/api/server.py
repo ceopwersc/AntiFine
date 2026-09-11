@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import uvicorn
 
 # Ensure the src directory is in the path
@@ -36,9 +36,8 @@ from src.services.ollama_service import (
     OllamaService,
 )
 from src.models.finding import Finding
+from src.models.ai_context import AIContext, AIMessage
 from src.services.ai_explanation import (
-    SYSTEM_PROMPT,
-    build_explanation_prompt,
     finding_id,
 )
 from src.services.remediation_explanation import (
@@ -46,6 +45,14 @@ from src.services.remediation_explanation import (
     build_remediation_review_prompt,
 )
 from src.ai.knowledge_service import find_rule_for_finding
+from src.ai.context_builder import (
+    build_context,
+    unmapped_compliance_fallback,
+    sanitize_unmapped_compliance_claims,
+    source_metadata,
+)
+from src.ai.prompts import EXPLANATION_SYSTEM_PROMPT, GENERAL_SYSTEM_PROMPT
+from src.ai.retriever import retrieve
 
 
 # ── Initialization ──────────────────────────────────────────────────────────
@@ -97,6 +104,13 @@ class AITestRequest(BaseModel):
 class FindingExplanationRequest(BaseModel):
     finding: Finding
     code_context: str | None = None
+
+class AIAskRequest(BaseModel):
+    question: str
+    # ``str`` keeps older local clients working while new clients get a
+    # validated, structured context contract.
+    context: AIContext | str | None = None
+    messages: list[AIMessage] = Field(default_factory=list, max_length=10)
 
 class RemediationExplanationRequest(BaseModel):
     finding: Finding
@@ -352,13 +366,27 @@ async def explain_finding(req: FindingExplanationRequest) -> Dict[str, Any]:
     """Explain an existing deterministic finding using the local model."""
     service = OllamaService()
     try:
+        matched_rule = find_rule_for_finding(req.finding)
+        query = " ".join(
+            filter(
+                None,
+                [
+                    matched_rule.rule_id if matched_rule else "",
+                    req.finding.rule_name,
+                    req.finding.severity,
+                    *req.finding.frameworks,
+                ],
+            )
+        )
+        retrieved = retrieve(query, top_k=5)
         explanation = await service.generate(
-            build_explanation_prompt(
+            build_context(
+                "Explain this existing AntiFine finding.",
+                retrieved,
                 req.finding,
                 req.code_context,
-                find_rule_for_finding(req.finding),
             ),
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=EXPLANATION_SYSTEM_PROMPT,
         )
         return {
             "finding_id": finding_id(req.finding),
@@ -366,6 +394,55 @@ async def explain_finding(req: FindingExplanationRequest) -> Dict[str, Any]:
             "provider": "ollama",
             "explanation": explanation,
             "generated_locally": True,
+            "sources": source_metadata(retrieved),
+        }
+    except OllamaDisabledError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except OllamaError as exc:
+        raise HTTPException(status_code=502, detail=_ollama_error_message(exc)) from exc
+
+
+@app.post("/api/ai/ask")
+async def ask_ai(req: AIAskRequest) -> Dict[str, Any]:
+    """Answer a question using retrieved local AntiFine knowledge."""
+    if not req.question.strip():
+        raise HTTPException(status_code=422, detail="Question must not be empty")
+    context_text = build_context(
+        req.question,
+        [],
+        structured_context=req.context,
+    )
+    rule_id = None
+    frameworks = None
+    if isinstance(req.context, AIContext) and req.context.source == "finding" and req.context.finding:
+        rule_id = req.context.finding.rule_id
+        frameworks = req.context.finding.frameworks
+    retrieved = retrieve(
+        f"{req.question}\n{context_text}",
+        top_k=5,
+        authoritative_rule_id=rule_id,
+        authoritative_frameworks=frameworks,
+    )
+    try:
+        service = OllamaService()
+        answer = await service.generate(
+            build_context(
+                req.question,
+                retrieved,
+                structured_context=req.context,
+                messages=req.messages,
+            ),
+            system_prompt=GENERAL_SYSTEM_PROMPT,
+        )
+        fallback = unmapped_compliance_fallback(req.question, req.context, retrieved)
+        answer = fallback or sanitize_unmapped_compliance_claims(
+            answer, req.question, req.context, retrieved
+        )
+        return {
+            "answer": answer,
+            "model": service.config.model,
+            "provider": "ollama",
+            "sources": source_metadata(retrieved),
         }
     except OllamaDisabledError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

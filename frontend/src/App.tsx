@@ -1,48 +1,47 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   Activity,
   AlertTriangle,
-  ArrowDownRight,
   ArrowUpRight,
-  Bell,
+  BookOpen,
+  Bot,
   Check,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
-  CircleHelp,
   Clock3,
   Code2,
   Copy,
-  Database,
   Download,
   FileCheck2,
   FileCode2,
   FileText,
-  Filter,
   GitBranch,
   KeyRound,
   LayoutDashboard,
   Menu,
+  MessageSquareText,
   MoreHorizontal,
   Play,
   Radar,
   RefreshCw,
   Search,
   Settings2,
-  Shield,
   ShieldAlert,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
+  Send,
+  Trash2,
+  WifiOff,
   Terminal,
   X,
 } from 'lucide-react';
-import { explainFinding, explainRemediation, generateReport, remediateFinding, runScan, type FindingExplanation, type RemediationExplanation } from './api';
-import { Area, AreaChart, ResponsiveContainer, Tooltip } from 'recharts';
+import { askAntiFine, explainFinding, explainRemediation, fetchAIHealth, generateReport, remediateFinding, runScan, type AskContext, type AskMessage, type AskResponse, type FindingExplanation, type RemediationExplanation } from './api';
 
 type Severity = 'Critical' | 'High' | 'Medium' | 'Low';
-type Page = 'overview' | 'scan' | 'findings' | 'compliance' | 'secrets' | 'history' | 'reports';
+type Page = 'overview' | 'scan' | 'findings' | 'compliance' | 'secrets' | 'history' | 'reports' | 'ai';
 
 interface Finding {
   id: string;
@@ -176,6 +175,12 @@ const navGroups = [
       { id: 'reports' as Page, label: 'Reports', icon: FileText },
     ],
   },
+  {
+    label: 'Intelligence',
+    items: [
+      { id: 'ai' as Page, label: 'Ask AntiFine', icon: MessageSquareText },
+    ],
+  },
 ];
 
 const severityStyles: Record<Severity, string> = {
@@ -191,6 +196,13 @@ function normalizeSeverity(value: unknown): Severity {
   if (normalized === 'high') return 'High';
   if (normalized === 'low' || normalized === 'informational' || normalized === 'info') return 'Low';
   return 'Medium';
+}
+
+function findingTechnology(file: string) {
+  if (file.endsWith('.tf')) return 'Terraform';
+  if (file.endsWith('.yaml') || file.endsWith('.yml')) return 'Kubernetes';
+  if (file.toLowerCase().includes('dockerfile')) return 'Dockerfile';
+  return 'Infrastructure';
 }
 
 function SeverityBadge({ severity }: { severity: Severity }) {
@@ -219,12 +231,11 @@ function AppShell({
       <aside className={`sidebar ${mobileOpen ? 'sidebar-open' : ''}`}>
         <div className="brand">
           <div className="brand-mark"><ShieldCheck size={17} /></div>
-          <span>antifine</span>
-          <span className="brand-beta">BETA</span>
+          <span>AntiFine</span>
         </div>
         <div className="workspace-switcher">
-          <div className="workspace-icon">AC</div>
-          <div><strong>Acme Cloud</strong><small>production</small></div>
+          <div className="workspace-icon">AF</div>
+          <div><strong>AntiFine</strong><small>LOCAL WORKSPACE</small></div>
           <ChevronDown size={14} className="muted" />
         </div>
         <nav className="side-nav" aria-label="Primary navigation">
@@ -245,21 +256,20 @@ function AppShell({
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <div className="status-pill"><span className="status-live" />All systems operational</div>
+          <div className="local-status-footer">
+            <span className="local-status-label">Local Engine</span>
+            <span className="local-status-value"><i className="status-live" />FastAPI · 127.0.0.1:8000</span>
+            <span className="local-status-label">Local AI</span>
+            <span className="local-status-value muted"><i className="status-idle" />Ollama · Local</span>
+          </div>
           <button className="nav-item"><Settings2 size={17} /><span>Settings</span></button>
-          <div className="user-card"><div className="avatar">RS</div><div><strong>Rashi Singh</strong><small>Administrator</small></div><MoreHorizontal size={16} className="muted" /></div>
         </div>
       </aside>
       {mobileOpen && <button className="mobile-scrim" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
       <main className="main-area">
         <header className="topbar">
-          <div className="topbar-title"><button className="mobile-menu" aria-label="Open navigation" onClick={() => setMobileOpen(true)}><Menu size={20} /></button><span>Workspace</span><ChevronRight size={14} className="muted" /><strong>{currentLabel}</strong></div>
-          <div className="topbar-actions">
-            <div className="environment"><span className="status-live" />Production</div>
-            <button className="icon-button" aria-label="Help"><CircleHelp size={18} /></button>
-            <button className="icon-button notification-button" aria-label="Notifications"><Bell size={18} /><span /></button>
-            <div className="top-avatar">RS</div>
-          </div>
+          <div className="topbar-title"><button className="mobile-menu" aria-label="Open navigation" onClick={() => setMobileOpen(true)}><Menu size={20} /></button><strong>{currentLabel}</strong></div>
+          <div className="topbar-actions"><div className="topbar-local">LOCAL WORKSPACE</div><div className="topbar-search-hint"><Search size={14} />Search <kbd>⌘K</kbd></div></div>
         </header>
         <div className="page-content">{children}</div>
       </main>
@@ -271,31 +281,23 @@ function PageHeader({ eyebrow, title, description, action }: { eyebrow?: string;
   return <div className="page-header"><div><div className="eyebrow">{eyebrow ?? 'Security posture'}</div><h1>{title}</h1>{description && <p>{description}</p>}</div>{action}</div>;
 }
 
-function StatCard({ label, value, detail, trend, icon: Icon, tone = 'blue' }: { label: string; value: string; detail: string; trend?: 'up' | 'down'; icon: typeof Shield; tone?: string }) {
-  return <div className={`stat-card stat-${tone}`}><div className="stat-card-top"><span>{label}</span><div className="stat-icon"><Icon size={17} /></div></div><div className="stat-value">{value}</div><div className={`stat-detail ${trend === 'up' ? 'trend-up' : trend === 'down' ? 'trend-down' : ''}`}>{trend === 'up' ? <ArrowUpRight size={14} /> : trend === 'down' ? <ArrowDownRight size={14} /> : null}{detail}</div></div>;
-}
-
 function Overview({ findings, onNavigate, onSelect }: { findings: Finding[]; onNavigate: (page: Page) => void; onSelect: (finding: Finding) => void }) {
   const counts = useMemo(() => findings.reduce<Record<Severity, number>>((acc, finding) => { acc[finding.severity] += 1; return acc; }, { Critical: 0, High: 0, Medium: 0, Low: 0 }), [findings]);
-  const chart = [
-    { label: 'Aug 12', score: 64 }, { label: 'Aug 14', score: 58 }, { label: 'Aug 16', score: 69 },
-    { label: 'Aug 19', score: 62 }, { label: 'Aug 21', score: 75 }, { label: 'Aug 23', score: 71 },
-    { label: 'Aug 26', score: 82 }, { label: 'Aug 28', score: 79 }, { label: 'Aug 30', score: 88 },
-    { label: 'Sep 02', score: 84 }, { label: 'Sep 06', score: 91 }, { label: 'Today', score: 89 },
-  ];
-  return <div className="content-stack">
-    <PageHeader eyebrow="Thursday, September 10, 2026" title="Good morning, Rashi" description="Here's the latest security posture across your infrastructure." action={<button className="button button-primary" onClick={() => onNavigate('scan')}><Play size={15} fill="currentColor" />Run a scan</button>} />
-    <div className="stat-grid">
-      <StatCard label="Security score" value="84" detail="+6.2% from last week" trend="up" icon={ShieldCheck} tone="green" />
-      <StatCard label="Open findings" value={String(findings.length)} detail="2 fewer than yesterday" trend="up" icon={ShieldAlert} tone="orange" />
-      <StatCard label="Assets monitored" value="128" detail="Across 6 repositories" icon={Database} tone="blue" />
-      <StatCard label="Secrets detected" value="2" detail="Both need attention" trend="down" icon={KeyRound} tone="red" />
+  return <div className="content-stack workstation-overview">
+    <PageHeader eyebrow="Local workspace" title="Overview" description="Current scan state and findings requiring engineering review." action={<button className="button button-primary" onClick={() => onNavigate('scan')}><Play size={14} fill="currentColor" />Run scan</button>} />
+    <section className="ops-strip" aria-label="Operational state">
+      <div><span className="ops-label">LAST SCAN</span><strong>IaC Config Audit</strong><code>scan_8f31c2</code><span>12 min ago</span></div>
+      <div><span className="ops-label">ENGINE</span><strong className="state-ok">COMPLETE</strong><span>128 files · 6 findings</span></div>
+      <div><span className="ops-label">SERVICES</span><span className="service-state"><i />FastAPI · 127.0.0.1:8000</span><span className="service-state"><i />Ollama · Local</span></div>
+    </section>
+    <section className="overview-findings panel">
+      <div className="console-heading"><div><span className="section-kicker">WORK QUEUE</span><h2>Open findings</h2></div><div className="console-summary"><span className="severity-count critical">{counts.Critical} critical</span><span className="severity-count high">{counts.High} high</span><button className="text-button" onClick={() => onNavigate('findings')}>Open findings <ArrowUpRight size={13} /></button></div></div>
+      <div className="overview-finding-list">{findings.filter((finding) => finding.status === 'Open').slice(0, 5).map((finding) => <button className="overview-finding-row" key={finding.id} onClick={() => onSelect(finding)}><SeverityBadge severity={finding.severity} /><code className="rule-id">{finding.id}</code><strong>{finding.rule_name}</strong><span className="file-ref">{finding.file}:{finding.line}</span><span className="framework-ref">{finding.framework}</span><ChevronRight size={14} /></button>)}</div>
+    </section>
+    <div className="overview-lower-grid">
+      <section className="console-panel"><div className="console-heading"><div><span className="section-kicker">SCAN STATE</span><h2>Latest activity</h2></div><button className="text-button" onClick={() => onNavigate('history')}>History <ArrowUpRight size={13} /></button></div><div className="activity-list compact-activity"><div className="activity-row"><div className="activity-status success"><Check size={13} /></div><div><strong>IaC audit completed</strong><span>6 findings · deterministic engine</span></div><time>12 min ago</time></div><div className="activity-row"><div className="activity-status"><GitBranch size={13} /></div><div><strong>Repository scan ready</strong><span>Local workspace · read-only</span></div><time>2 hr ago</time></div></div></section>
+      <section className="console-panel"><div className="console-heading"><div><span className="section-kicker">SEVERITY</span><h2>Finding distribution</h2></div><button className="text-button" onClick={() => onNavigate('findings')}>Filter <ArrowUpRight size={13} /></button></div><div className="severity-console">{(['Critical', 'High', 'Medium', 'Low'] as Severity[]).map((severity) => <button key={severity} onClick={() => onNavigate('findings')}><SeverityBadge severity={severity} /><strong>{counts[severity]}</strong><span>{severity === 'Critical' ? 'immediate review' : severity === 'High' ? 'priority queue' : 'remaining queue'}</span></button>)}</div></section>
     </div>
-    <div className="overview-grid">
-      <section className="panel posture-panel"><div className="panel-heading"><div><h2>Security posture</h2><p>Composite score across the last 30 days</p></div><button className="select-button">Last 30 days <ChevronDown size={14} /></button></div><div className="posture-chart"><div className="score-ring"><div><strong>84</strong><span>/ 100</span><small>Good</small></div></div><div className="chart-area"><div className="chart-y-labels"><span>100</span><span>75</span><span>50</span><span>25</span></div><div className="line-chart"><ResponsiveContainer width="100%" height="100%"><AreaChart data={chart} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}><defs><linearGradient id="postureFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#5ba7ff" stopOpacity={0.3} /><stop offset="100%" stopColor="#5ba7ff" stopOpacity={0} /></linearGradient></defs><Area type="monotone" dataKey="score" stroke="#65afff" strokeWidth={2} fill="url(#postureFill)" dot={false} /><Tooltip contentStyle={{ background: '#172433', border: '1px solid #35516e', borderRadius: 5, color: '#dbeafa', fontSize: 10 }} labelStyle={{ color: '#8fa6bf' }} formatter={(value) => [`${value}`, 'Score']} /></AreaChart></ResponsiveContainer></div></div></div><div className="chart-legend"><span><i className="legend-dot blue" />Score</span><span className="chart-note"><ArrowUpRight size={13} /> 6.2% vs previous period</span></div></section>
-      <section className="panel severity-panel"><div className="panel-heading"><div><h2>Findings by severity</h2><p>Prioritize what needs attention</p></div><button className="icon-button"><MoreHorizontal size={18} /></button></div><div className="severity-list">{(['Critical', 'High', 'Medium', 'Low'] as Severity[]).map((severity) => <button className="severity-row" key={severity} onClick={() => onNavigate('findings')}><div className="severity-row-label"><SeverityBadge severity={severity} /><strong>{counts[severity]}</strong></div><div className="severity-track"><div className={`severity-progress ${severity.toLowerCase()}`} style={{ width: `${Math.max(counts[severity] * 13, 8)}%` }} /></div><ChevronRight size={15} className="muted" /></button>)}</div><button className="text-button" onClick={() => onNavigate('findings')}>View all findings <ArrowUpRight size={14} /></button></section>
-    </div>
-    <div className="overview-grid lower-grid"><section className="panel"><div className="panel-heading"><div><h2>Recent findings</h2><p>Detected in the latest scan</p></div><button className="text-button" onClick={() => onNavigate('findings')}>View all <ArrowUpRight size={14} /></button></div><div className="recent-list">{findings.slice(0, 4).map((finding) => <button className="recent-row" key={finding.id} onClick={() => onSelect(finding)}><div className={`finding-icon ${finding.severity.toLowerCase()}`}><ShieldAlert size={16} /></div><div className="recent-main"><strong>{finding.rule_name}</strong><span>{finding.file}:{finding.line}</span></div><SeverityBadge severity={finding.severity} /><span className="recent-time">{finding.detected}</span><ChevronRight size={15} className="muted" /></button>)}</div></section><section className="panel activity-panel"><div className="panel-heading"><div><h2>Scan activity</h2><p>Latest runs across your workspace</p></div><button className="icon-button"><MoreHorizontal size={18} /></button></div><div className="activity-list"><div className="activity-row"><div className="activity-status success"><Check size={14} /></div><div><strong>IaC audit completed</strong><span>acme-infrastructure · 6 findings</span></div><time>12 min ago</time></div><div className="activity-row"><div className="activity-status"><GitBranch size={14} /></div><div><strong>Pull request scanned</strong><span>acme/web · #418</span></div><time>2 hr ago</time></div><div className="activity-row"><div className="activity-status success"><Check size={14} /></div><div><strong>Secret rotation verified</strong><span>production / AWS</span></div><time>Yesterday</time></div></div><button className="text-button" onClick={() => onNavigate('history')}>Open scan history <ArrowUpRight size={14} /></button></section></div>
   </div>;
 }
 
@@ -338,8 +340,16 @@ function FindingsPage({ findings, onSelect }: { findings: Finding[]; onSelect: (
   const [query, setQuery] = useState('');
   const [severity, setSeverity] = useState<Severity | 'All'>('All');
   const [status, setStatus] = useState<'All' | Finding['status']>('All');
-  const filtered = findings.filter((finding) => (severity === 'All' || finding.severity === severity) && (status === 'All' || finding.status === status) && `${finding.rule_name} ${finding.file} ${finding.frameworks.join(' ')}`.toLowerCase().includes(query.toLowerCase()));
-  return <div className="content-stack"><PageHeader eyebrow="Security posture" title="Findings" description="Review, prioritize, and remediate issues discovered across your infrastructure." action={<button className="button button-secondary"><Download size={15} />Export CSV</button>} /><div className="finding-toolbar"><div className="search-input"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search findings, files, or frameworks" /><kbd>⌘ K</kbd></div><div className="filter-group"><SlidersHorizontal size={15} className="muted" /><select value={severity} onChange={(event) => setSeverity(event.target.value as Severity | 'All')} aria-label="Filter by severity"><option value="All">All severities</option><option>Critical</option><option>High</option><option>Medium</option><option>Low</option></select><select value={status} onChange={(event) => setStatus(event.target.value as 'All' | Finding['status'])} aria-label="Filter by status"><option value="All">All status</option><option>Open</option><option>Fixed</option><option>Accepted</option></select><button className="icon-button" aria-label="More filters"><Filter size={16} /></button></div></div><div className="panel table-panel"><div className="table-meta"><span><strong>{filtered.length}</strong> findings</span><span>Last scan 12 min ago · <span className="live-text">Live data</span></span></div><div className="table-scroll"><table className="findings-table"><thead><tr><th>Finding</th><th>Severity</th><th>Location</th><th>Framework</th><th>Status</th><th aria-label="Actions" /></tr></thead><tbody>{filtered.map((finding) => <tr key={finding.id} onClick={() => onSelect(finding)}><td><div className="finding-cell"><div className={`finding-icon ${finding.severity.toLowerCase()}`}><ShieldAlert size={15} /></div><div><strong>{finding.rule_name}</strong><span>{finding.id}</span></div></div></td><td><SeverityBadge severity={finding.severity} /></td><td><code>{finding.file}</code><span className="line-number">:{finding.line}</span></td><td><span className="framework-pill">{finding.framework}</span></td><td><span className={`status-badge ${finding.status.toLowerCase()}`}><span />{finding.status}</span></td><td><ChevronRight size={16} className="muted" /></td></tr>)}</tbody></table></div>{filtered.length === 0 && <div className="empty-state"><Search size={24} /><strong>No findings match these filters</strong><span>Try a different search or reset the filters.</span></div>}<div className="table-footer"><span>Showing {filtered.length} of {findings.length}</span><div><button className="pagination-button" disabled>Previous</button><button className="pagination-button active">1</button><button className="pagination-button">Next</button></div></div></div></div>;
+  const [sortBy, setSortBy] = useState<'severity' | 'file' | 'status'>('severity');
+  const severityOrder: Record<Severity, number> = { Critical: 0, High: 1, Medium: 2, Low: 3 };
+  const filtered = findings
+    .filter((finding) => (severity === 'All' || finding.severity === severity) && (status === 'All' || finding.status === status) && `${finding.id} ${finding.rule_name} ${finding.file} ${finding.frameworks.join(' ')}`.toLowerCase().includes(query.toLowerCase()))
+    .sort((left, right) => sortBy === 'severity'
+      ? severityOrder[left.severity] - severityOrder[right.severity]
+      : sortBy === 'file'
+        ? left.file.localeCompare(right.file)
+        : left.status.localeCompare(right.status));
+  return <div className="content-stack workstation-findings"><PageHeader eyebrow="Finding queue" title="Findings" description="Deterministic findings, code locations, and review state." action={<button className="button button-secondary"><Download size={14} />Export</button>} /><div className="finding-workflow"><span>Finding</span><ChevronRight size={13} /><span>Code</span><ChevronRight size={13} /><span>Rule</span><ChevronRight size={13} /><span>Compliance</span><ChevronRight size={13} /><span>Remediation</span><ChevronRight size={13} /><span>Diff</span><ChevronRight size={13} /><span>Apply</span><ChevronRight size={13} /><span>Rescan</span></div><div className="finding-toolbar"><div className="search-input"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search rule IDs, files, paths, frameworks" /><kbd>⌘ K</kbd></div><div className="filter-group"><SlidersHorizontal size={15} className="muted" /><select value={severity} onChange={(event) => setSeverity(event.target.value as Severity | 'All')} aria-label="Filter by severity"><option value="All">All severities</option><option>Critical</option><option>High</option><option>Medium</option><option>Low</option></select><select value={status} onChange={(event) => setStatus(event.target.value as 'All' | Finding['status'])} aria-label="Filter by status"><option value="All">All status</option><option>Open</option><option>Fixed</option><option>Accepted</option></select><select value={sortBy} onChange={(event) => setSortBy(event.target.value as typeof sortBy)} aria-label="Sort findings"><option value="severity">Sort: severity</option><option value="file">Sort: file</option><option value="status">Sort: status</option></select></div></div><div className="panel table-panel"><div className="table-meta"><span><strong>{filtered.length}</strong> findings in current scan</span><span><code>scan_8f31c2</code> · <span className="live-text">LOCAL DATA</span></span></div><div className="table-scroll"><table className="findings-table workstation-table"><thead><tr><th>Severity</th><th>Rule / finding</th><th>Code location</th><th>Framework</th><th>Evidence</th><th>Status</th><th aria-label="Actions" /></tr></thead><tbody>{filtered.map((finding) => <tr key={finding.id} onClick={() => onSelect(finding)}><td><SeverityBadge severity={finding.severity} /></td><td><div className="finding-cell"><div><code className="rule-id">{finding.id}</code><strong>{finding.rule_name}</strong></div></div></td><td><code>{finding.file}</code><span className="line-number">:{finding.line}</span><pre className="table-code">{finding.before.split('\n')[0]}</pre></td><td><span className="framework-pill">{finding.framework}</span></td><td><span className="evidence-text">detected {finding.detected}</span></td><td><span className={`status-badge ${finding.status.toLowerCase()}`}><span />{finding.status}</span></td><td><ChevronRight size={15} className="muted" /></td></tr>)}</tbody></table></div>{filtered.length === 0 && <div className="empty-state"><Search size={22} /><strong>No findings match these filters</strong><span>Try a rule ID, file path, or framework.</span></div>}<div className="table-footer"><span>Showing {filtered.length} of {findings.length} · click a row to inspect code and remediation</span><div><button className="pagination-button" disabled>Previous</button><button className="pagination-button active">1</button><button className="pagination-button">Next</button></div></div></div></div>;
 }
 
 function renderExplanation(explanation: string) {
@@ -352,6 +362,142 @@ function renderExplanation(explanation: string) {
   });
 }
 
+type AssistantMessage = AskMessage & { sources?: AskResponse['sources'] };
+
+function renderMarkdown(markdown: string) {
+  const renderInline = (value: string) => value.split(/(`[^`]+`)/g).map((part, partIndex) => part.startsWith('`') && part.endsWith('`')
+    ? <code key={partIndex}>{part.slice(1, -1)}</code>
+    : part);
+  const lines = markdown.split(/\r?\n/);
+  const nodes: ReactNode[] = [];
+  let inCode = false;
+  let codeLines: string[] = [];
+  lines.forEach((line, index) => {
+    if (line.trim().startsWith('```')) {
+      if (inCode) {
+        nodes.push(<pre className="assistant-code" key={`code-${index}`}><code>{codeLines.join('\n')}</code></pre>);
+        codeLines = [];
+      }
+      inCode = !inCode;
+      return;
+    }
+    if (inCode) {
+      codeLines.push(line);
+      return;
+    }
+    const content = line.replace(/^\s*[-*]\s/, '');
+    if (!line.trim()) return;
+    if (/^#{1,3}\s/.test(line)) {
+      nodes.push(<h4 key={index}>{line.replace(/^#{1,3}\s/, '')}</h4>);
+    } else if (/^\s*[-*]\s/.test(line)) {
+      nodes.push(<li key={index}>{renderInline(content)}</li>);
+    } else {
+      nodes.push(<p key={index}>{renderInline(content)}</p>);
+    }
+  });
+  return nodes;
+}
+
+function AskAntiFinePage({
+  context,
+  initialQuestion,
+  onClearContext,
+  onNewChat,
+}: {
+  context?: AskContext;
+  initialQuestion?: string;
+  onClearContext: () => void;
+  onNewChat: () => void;
+}) {
+  const [health, setHealth] = useState<Awaited<ReturnType<typeof fetchAIHealth>> | null>(null);
+  const [messages, setMessages] = useState<AssistantMessage[]>([]);
+  const [question, setQuestion] = useState(initialQuestion ?? '');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [copied, setCopied] = useState(false);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const suggestions = [
+    'How does AntiFine detect high-entropy secrets?',
+    'Why is TF-AWS-004 critical?',
+    'Which CIS controls are currently failing?',
+    'How does deterministic remediation work?',
+    'What does PSS Restricted require?',
+  ];
+
+  const checkHealth = async () => {
+    try {
+      setHealth(await fetchAIHealth());
+    } catch {
+      setHealth({ enabled: true, available: false, provider: 'ollama', model: 'qwen2.5:7b', error: 'Backend unavailable' });
+    }
+  };
+  useEffect(() => { void checkHealth(); }, []);
+  useEffect(() => {
+    const shortcut = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        composerRef.current?.focus();
+      }
+      if (event.key === 'Escape' && context) onClearContext();
+    };
+    window.addEventListener('keydown', shortcut);
+    return () => window.removeEventListener('keydown', shortcut);
+  }, [context, onClearContext]);
+
+  const sendQuestion = async (value = question) => {
+    const trimmed = value.trim();
+    if (!trimmed || loading) return;
+    setQuestion('');
+    setError('');
+    const previousMessages = messages.map(({ role, content }) => ({ role, content })).slice(-10);
+    setMessages((current) => [...current, { role: 'user', content: trimmed }]);
+    setLoading(true);
+    try {
+      const response = await askAntiFine(trimmed, context, previousMessages);
+      if (!response.answer?.trim()) throw new Error('The assistant returned an empty response.');
+      setMessages((current) => [...current, { role: 'assistant', content: response.answer, sources: response.sources }]);
+    } catch (requestError: any) {
+      setError(requestError?.response?.data?.detail || 'Local AI is unavailable.');
+    } finally {
+      setLoading(false);
+    }
+  };
+  const retry = () => {
+    const lastQuestion = [...messages].reverse().find((message) => message.role === 'user')?.content;
+    if (lastQuestion) void sendQuestion(lastQuestion);
+  };
+  const newChat = () => { setMessages([]); setError(''); setQuestion(''); onNewChat(); };
+  const copyAnswer = async (content: string) => {
+    await navigator.clipboard?.writeText(content);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
+  };
+  const available = health?.available === true;
+
+  return <div className="content-stack assistant-page">
+    <div className="assistant-header">
+      <div><div className="eyebrow">Local intelligence</div><h1>Ask AntiFine</h1><p>Local security intelligence for your infrastructure.</p></div>
+      <div className="assistant-actions"><button className="button button-secondary" onClick={newChat}><MessageSquareText size={14} />New chat</button><button className="button button-secondary" onClick={() => { setMessages([]); setError(''); }} disabled={!messages.length}><Trash2 size={14} />Clear conversation</button></div>
+    </div>
+    <div className={`assistant-status ${available ? 'assistant-online' : 'assistant-offline'}`}>
+      {available ? <Bot size={17} /> : <WifiOff size={17} />}
+      <div><strong>{available ? 'Local AI ready' : health ? 'Ollama unavailable' : 'Checking local AI…'}</strong><span>Answers are generated locally using Ollama and AntiFine’s local knowledge.</span></div>
+      <span className="assistant-model">{health?.provider ?? 'ollama'} · {health?.model ?? 'qwen2.5:7b'}</span>
+      {!available && <button className="text-button" onClick={() => void checkHealth()}>Retry connection</button>}
+    </div>
+    {context && <div className="assistant-context"><div><span>Analyzing</span><strong>{context.rule_id || context.finding_id}</strong></div><SeverityBadge severity={normalizeSeverity(context.severity)} /><code>{context.technology} · {context.finding_id}</code><button className="icon-button small" aria-label="Remove finding context" onClick={onClearContext}><X size={14} /></button></div>}
+    <section className="panel assistant-panel">
+      <div className="assistant-conversation" aria-live="polite">
+        {!messages.length && <div className="assistant-empty"><div className="assistant-empty-icon"><MessageSquareText size={20} /></div><h2>What can I help you investigate?</h2><p>Ask about AntiFine rules, compliance mappings, remediation behavior, or a finding.</p><div className="suggestion-grid">{suggestions.map((suggestion) => <button key={suggestion} onClick={() => void sendQuestion(suggestion)}>{suggestion}<Send size={13} /></button>)}</div></div>}
+        {messages.map((message, index) => <div className={`assistant-message ${message.role}`} key={`${message.role}-${index}`}><div className="message-meta">{message.role === 'user' ? 'You' : 'AntiFine · local assistant'}</div><div className="message-body">{message.role === 'assistant' ? renderMarkdown(message.content) : <p>{message.content}</p>}</div>{message.role === 'assistant' && <>{message.sources?.length ? <div className="source-list"><span className="source-label">Sources</span>{message.sources.map((source) => <div className="source-item" key={`${source.source}-${source.title}`}><BookOpen size={13} /><div><strong>{source.title}</strong><span>{source.source}{source.rule_id ? ` · ${source.rule_id}` : ''}</span></div></div>)}</div> : null}<div className="message-actions"><button className="text-button" onClick={() => void copyAnswer(message.content)}><Copy size={13} />{copied ? 'Copied' : 'Copy answer'}</button><button className="text-button" onClick={retry}><RefreshCw size={13} />Regenerate</button></div></>}</div>)}
+        {loading && <div className="assistant-message assistant"><div className="message-meta">AntiFine · local assistant</div><div className="assistant-loading"><RefreshCw size={14} className="spin" />Analyzing locally…</div></div>}
+        {error && <div className="assistant-error"><strong>Local AI is unavailable.</strong><span>AntiFine’s deterministic security engine remains fully operational.</span><button className="text-button" onClick={retry}>Retry</button></div>}
+      </div>
+      <div className="assistant-composer"><textarea ref={composerRef} value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendQuestion(); } }} placeholder="Ask about AntiFine, a finding, compliance rule, or remediation…" aria-label="Ask AntiFine a question" /><div className="composer-footer"><span><kbd>Enter</kbd> send · <kbd>Shift + Enter</kbd> newline · <kbd>⌘ K</kbd> focus</span><button className="button button-primary" onClick={() => void sendQuestion()} disabled={loading || !question.trim()}>{loading ? <><RefreshCw size={14} className="spin" />Analyzing…</> : <><Send size={14} />Send</>}</button></div></div>
+    </section>
+  </div>;
+}
+
 function remediationDiff(before: string, after: string) {
   return `--- deterministic before\n+++ deterministic after\n${before.split('\n').map((line) => `- ${line}`).join('\n')}\n${after.split('\n').map((line) => `+ ${line}`).join('\n')}`;
 }
@@ -360,12 +506,14 @@ function FindingDrawer({
   finding,
   onClose,
   onRemediate,
+  onAsk,
   explanationCache,
   onExplanation,
 }: {
   finding: Finding;
   onClose: () => void;
   onRemediate: () => void;
+  onAsk: () => void;
   explanationCache: Record<string, FindingExplanation>;
   onExplanation: (findingId: string, explanation: FindingExplanation) => void;
 }) {
@@ -391,7 +539,7 @@ function FindingDrawer({
       setAIError(detail || 'Local AI unavailable');
     } finally { setLoadingAI(false); }
   };
-  return <><motion.button className="drawer-scrim" onClick={onClose} aria-label="Close finding details" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} /><motion.aside className="detail-drawer" role="dialog" aria-modal="true" aria-label="Finding details" initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: 'spring', damping: 28, stiffness: 260 }}><div className="drawer-header"><div><span className="drawer-eyebrow">Finding {finding.id}</span><h2>{finding.rule_name}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={19} /></button></div><div className="drawer-content"><div className="drawer-badges"><SeverityBadge severity={finding.severity} /><span className={`status-badge ${finding.status.toLowerCase()}`}><span />{finding.status}</span></div><section className="drawer-section"><h3>Why this matters</h3><p>{finding.description}</p></section><section className="drawer-section"><h3>Location</h3><div className="location-card"><FileCode2 size={16} /><code>{finding.file}</code><span>Line {finding.line}</span><button className="icon-button small" aria-label="Copy location" onClick={() => void navigator.clipboard?.writeText(`${finding.file}:${finding.line}`)}><Copy size={14} /></button></div></section><section className="drawer-section"><h3>Compliance mapping</h3><div className="framework-list">{finding.frameworks.map((framework) => <span key={framework} className="framework-pill">{framework}</span>)}</div></section><section className="drawer-section remediation-preview"><div className="section-heading-row"><h3>Recommended remediation</h3><button className="text-button" onClick={copy}>{copied ? <><Check size={13} />Copied</> : <><Copy size={13} />Copy</>}</button></div><p>{finding.remediation}</p><pre>{finding.after}</pre></section><section className="drawer-section ai-explanation" aria-live="polite"><div className="section-heading-row"><div><h3>AI Security Explanation</h3><span className="ai-label">Local AI · Ollama</span></div>{explanation && <button className="text-button" onClick={() => void requestExplanation()} disabled={loadingAI}>{loadingAI ? 'Analyzing locally…' : 'Regenerate'}</button>}</div><p className="ai-disclaimer">AI-generated explanation based on AntiFine's deterministic finding.</p>{aiError ? <div className="ai-error"><strong>Local AI unavailable</strong><span>AntiFine's deterministic security analysis is still available.</span><button className="text-button" onClick={() => void requestExplanation()} disabled={loadingAI}>Retry</button></div> : explanation ? <div className="ai-response"><span className="ai-model">{explanation.model} · generated locally</span>{renderExplanation(explanation.explanation)}</div> : <button className="button button-secondary ai-explain-button" onClick={() => void requestExplanation()} disabled={loadingAI}>{loadingAI ? <><RefreshCw size={15} className="spin" />Analyzing locally…</> : <><Sparkles size={15} />Explain with Local AI</>}</button>}</section></div><div className="drawer-footer"><button className="button button-secondary" onClick={onClose}>Dismiss</button><button className="button button-primary" onClick={onRemediate}><Sparkles size={15} />Review fix</button></div></motion.aside></>;
+  return <><motion.button className="drawer-scrim" onClick={onClose} aria-label="Close finding details" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} /><motion.aside className="detail-drawer" role="dialog" aria-modal="true" aria-label="Finding details" initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: 'spring', damping: 28, stiffness: 260 }}><div className="drawer-header"><div><span className="drawer-eyebrow">Finding <code>{finding.id}</code></span><h2>{finding.rule_name}</h2><div className="drawer-meta-line"><span>{findingTechnology(finding.file)}</span><span>detected {finding.detected}</span></div></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={19} /></button></div><div className="drawer-content"><div className="drawer-badges"><SeverityBadge severity={finding.severity} /><span className={`status-badge ${finding.status.toLowerCase()}`}><span />{finding.status}</span></div><section className="drawer-section"><h3>Why detected</h3><p>{finding.description}</p></section><section className="drawer-section"><h3>Code</h3><div className="drawer-code"><div><span>{finding.file}</span><span>line {finding.line}</span></div><pre>{finding.before}</pre></div></section><section className="drawer-section"><h3>Location</h3><div className="location-card"><FileCode2 size={16} /><code>{finding.file}</code><span>Line {finding.line}</span><button className="icon-button small" aria-label="Copy location" onClick={() => void navigator.clipboard?.writeText(`${finding.file}:${finding.line}`)}><Copy size={14} /></button></div></section><section className="drawer-section"><h3>Compliance mapping</h3><div className="framework-list">{finding.frameworks.map((framework) => <span key={framework} className="framework-pill">{framework}</span>)}</div></section><section className="drawer-section remediation-preview"><div className="section-heading-row"><h3>Deterministic remediation</h3><button className="text-button" onClick={copy}>{copied ? <><Check size={13} />Copied</> : <><Copy size={13} />Copy</>}</button></div><p>{finding.remediation}</p><pre>{finding.after}</pre></section><section className="drawer-section ai-explanation" aria-live="polite"><div className="section-heading-row"><div><h3>Local AI</h3><span className="ai-label">Ollama · secondary explanation</span></div>{explanation && <button className="text-button" onClick={() => void requestExplanation()} disabled={loadingAI}>{loadingAI ? 'Analyzing locally…' : 'Regenerate'}</button>}</div><p className="ai-disclaimer">AI explains the deterministic finding; it does not change the rule result or remediation.</p>{aiError ? <div className="ai-error"><strong>Local AI unavailable</strong><span>AntiFine's deterministic security analysis is still available.</span><button className="text-button" onClick={() => void requestExplanation()} disabled={loadingAI}>Retry</button></div> : explanation ? <div className="ai-response"><span className="ai-model">{explanation.model} · generated locally</span>{renderExplanation(explanation.explanation)}</div> : <button className="button button-secondary ai-explain-button" onClick={() => void requestExplanation()} disabled={loadingAI}>{loadingAI ? <><RefreshCw size={15} className="spin" />Analyzing locally…</> : <><Sparkles size={15} />Explain with Local AI</>}</button>}<button className="button button-secondary ai-ask-button" onClick={onAsk}><MessageSquareText size={14} />Ask AntiFine about this</button></section></div><div className="drawer-footer"><button className="button button-secondary" onClick={onClose}>Dismiss</button><button className="button button-primary" onClick={onRemediate}><Sparkles size={15} />Review fix</button></div></motion.aside></>;
 }
 
 function RemediationModal({ finding, onClose, onApplied }: { finding: Finding; onClose: () => void; onApplied: () => void }) {
@@ -456,7 +604,7 @@ function SecretsPage() {
 
 function HistoryPage() {
   const scans = [{ id: 'scan_8f31c2', target: 'acme-infrastructure', type: 'IaC Config Audit', findings: 6, status: 'Completed', time: '12 min ago', duration: '18.4s' }, { id: 'scan_3a10b9', target: 'acme/web · PR #418', type: 'IaC Config Audit', findings: 2, status: 'Completed', time: '2 hr ago', duration: '11.2s' }, { id: 'scan_887bc1', target: 'staging ingress', type: 'SSRF Web Audit', findings: 0, status: 'Completed', time: 'Yesterday', duration: '7.8s' }, { id: 'scan_11ac72', target: 'acme-infrastructure', type: 'IaC Config Audit', findings: 8, status: 'Completed', time: 'Sep 08, 2026', duration: '20.1s' }];
-  return <div className="content-stack"><PageHeader eyebrow="Activity" title="Scan history" description="A complete audit trail of scans run in the Acme Cloud workspace." action={<button className="button button-secondary"><Download size={15} />Export history</button>} /><div className="panel table-panel"><div className="table-meta"><span><strong>Recent scans</strong></span><div className="filter-group"><select aria-label="Filter scan type"><option>All scan types</option><option>IaC Config Audit</option><option>SSRF Web Audit</option></select><button className="icon-button" aria-label="Refresh history"><RefreshCw size={15} /></button></div></div><div className="table-scroll"><table className="findings-table history-table"><thead><tr><th>Target</th><th>Scan type</th><th>Findings</th><th>Status</th><th>Run time</th><th /></tr></thead><tbody>{scans.map((scan) => <tr key={scan.id}><td><div className="finding-cell"><div className="finding-icon blue"><GitBranch size={15} /></div><div><strong>{scan.target}</strong><span>{scan.id} · {scan.duration}</span></div></div></td><td><span className="muted">{scan.type}</span></td><td><span className={scan.findings ? 'finding-count' : 'finding-count clean'}>{scan.findings || 'Clean'}</span></td><td><span className="status-badge fixed"><span />{scan.status}</span></td><td>{scan.time}</td><td><ChevronRight size={16} className="muted" /></td></tr>)}</tbody></table></div></div></div>;
+  return <div className="content-stack"><PageHeader eyebrow="Activity" title="Scan history" description="A complete audit trail of local scans." action={<button className="button button-secondary"><Download size={15} />Export history</button>} /><div className="panel table-panel"><div className="table-meta"><span><strong>Recent scans</strong></span><div className="filter-group"><select aria-label="Filter scan type"><option>All scan types</option><option>IaC Config Audit</option><option>SSRF Web Audit</option></select><button className="icon-button" aria-label="Refresh history"><RefreshCw size={15} /></button></div></div><div className="table-scroll"><table className="findings-table history-table"><thead><tr><th>Target</th><th>Scan type</th><th>Findings</th><th>Status</th><th>Run time</th><th /></tr></thead><tbody>{scans.map((scan) => <tr key={scan.id}><td><div className="finding-cell"><div className="finding-icon blue"><GitBranch size={15} /></div><div><strong>{scan.target}</strong><span>{scan.id} · {scan.duration}</span></div></div></td><td><span className="muted">{scan.type}</span></td><td><span className={scan.findings ? 'finding-count' : 'finding-count clean'}>{scan.findings || 'Clean'}</span></td><td><span className="status-badge fixed"><span />{scan.status}</span></td><td>{scan.time}</td><td><ChevronRight size={16} className="muted" /></td></tr>)}</tbody></table></div></div></div>;
 }
 
 function ReportsPage() {
@@ -472,9 +620,25 @@ export default function App() {
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
   const [remediationFinding, setRemediationFinding] = useState<Finding | null>(null);
   const [explanationCache, setExplanationCache] = useState<Record<string, FindingExplanation>>({});
+  const [assistantContext, setAssistantContext] = useState<AskContext>();
+  const [assistantQuestion, setAssistantQuestion] = useState('');
   const [target, setTarget] = useState('infra/production.tf');
   const selectFinding = (finding: Finding) => setSelectedFinding(finding);
+  const askAboutFinding = (finding: Finding) => {
+    setAssistantContext({
+      finding_id: finding.id,
+      rule_id: finding.id,
+      title: finding.rule_name,
+      severity: finding.severity,
+      technology: finding.file.endsWith('.tf') ? 'terraform' : finding.file.endsWith('.yaml') || finding.file.endsWith('.yml') ? 'kubernetes' : 'docker',
+      framework: finding.framework,
+      code_context: finding.before,
+    });
+    setAssistantQuestion('Explain this finding and why AntiFine classified it this way.');
+    setSelectedFinding(null);
+    setPage('ai');
+  };
   const completeScan = (nextFindings: Finding[]) => { setFindings(nextFindings); setPage('findings'); };
   const markApplied = () => { if (remediationFinding) setFindings((current) => current.map((item) => item.id === remediationFinding.id ? { ...item, status: 'Fixed' } : item)); };
-  return <AppShell page={page} setPage={setPage}><AnimatePresence mode="wait"><motion.div key={page} className="page-transition" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.16 }}>{page === 'overview' && <Overview findings={findings} onNavigate={setPage} onSelect={selectFinding} />}{page === 'scan' && <ScanWorkspace onComplete={completeScan} target={target} setTarget={setTarget} />}{page === 'findings' && <FindingsPage findings={findings} onSelect={selectFinding} />}{page === 'compliance' && <CompliancePage />}{page === 'secrets' && <SecretsPage />}{page === 'history' && <HistoryPage />}{page === 'reports' && <ReportsPage />}</motion.div></AnimatePresence><AnimatePresence>{selectedFinding && !remediationFinding && <FindingDrawer finding={selectedFinding} onClose={() => setSelectedFinding(null)} onRemediate={() => setRemediationFinding(selectedFinding)} explanationCache={explanationCache} onExplanation={(id, result) => setExplanationCache((current) => ({ ...current, [id]: result }))} />}{remediationFinding && <RemediationModal finding={remediationFinding} onClose={() => setRemediationFinding(null)} onApplied={markApplied} />}</AnimatePresence></AppShell>;
+  return <AppShell page={page} setPage={(nextPage) => { if (nextPage !== 'ai') setAssistantContext(undefined); setPage(nextPage); }}><AnimatePresence mode="wait"><motion.div key={page} className="page-transition" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.16 }}>{page === 'overview' && <Overview findings={findings} onNavigate={setPage} onSelect={selectFinding} />}{page === 'scan' && <ScanWorkspace onComplete={completeScan} target={target} setTarget={setTarget} />}{page === 'findings' && <FindingsPage findings={findings} onSelect={selectFinding} />}{page === 'compliance' && <CompliancePage />}{page === 'secrets' && <SecretsPage />}{page === 'history' && <HistoryPage />}{page === 'reports' && <ReportsPage />}{page === 'ai' && <AskAntiFinePage context={assistantContext} initialQuestion={assistantQuestion} onClearContext={() => setAssistantContext(undefined)} onNewChat={() => { setAssistantContext(undefined); setAssistantQuestion(''); }} />}</motion.div></AnimatePresence><AnimatePresence>{selectedFinding && !remediationFinding && <FindingDrawer finding={selectedFinding} onClose={() => setSelectedFinding(null)} onRemediate={() => setRemediationFinding(selectedFinding)} onAsk={() => askAboutFinding(selectedFinding)} explanationCache={explanationCache} onExplanation={(id, result) => setExplanationCache((current) => ({ ...current, [id]: result }))} />}{remediationFinding && <RemediationModal finding={remediationFinding} onClose={() => setRemediationFinding(null)} onApplied={markApplied} />}</AnimatePresence></AppShell>;
 }
