@@ -4,14 +4,12 @@ import {
   Activity,
   AlertTriangle,
   ArrowUpRight,
-  Bell,
   BookOpen,
   Bot,
   Check,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
-  CircleHelp,
   Clock3,
   Code2,
   Copy,
@@ -200,6 +198,13 @@ function normalizeSeverity(value: unknown): Severity {
   return 'Medium';
 }
 
+function findingTechnology(file: string) {
+  if (file.endsWith('.tf')) return 'Terraform';
+  if (file.endsWith('.yaml') || file.endsWith('.yml')) return 'Kubernetes';
+  if (file.toLowerCase().includes('dockerfile')) return 'Dockerfile';
+  return 'Infrastructure';
+}
+
 function SeverityBadge({ severity }: { severity: Severity }) {
   return <span className={`severity-badge ${severityStyles[severity]}`}><span className="severity-dot" />{severity}</span>;
 }
@@ -226,8 +231,7 @@ function AppShell({
       <aside className={`sidebar ${mobileOpen ? 'sidebar-open' : ''}`}>
         <div className="brand">
           <div className="brand-mark"><ShieldCheck size={17} /></div>
-          <span>antifine</span>
-          <span className="brand-beta">BETA</span>
+          <span>AntiFine</span>
         </div>
         <div className="workspace-switcher">
           <div className="workspace-icon">AF</div>
@@ -252,21 +256,20 @@ function AppShell({
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <div className="status-pill"><span className="status-live" />All systems operational</div>
+          <div className="local-status-footer">
+            <span className="local-status-label">Local Engine</span>
+            <span className="local-status-value"><i className="status-live" />FastAPI · 127.0.0.1:8000</span>
+            <span className="local-status-label">Local AI</span>
+            <span className="local-status-value muted"><i className="status-idle" />Ollama · Local</span>
+          </div>
           <button className="nav-item"><Settings2 size={17} /><span>Settings</span></button>
-          <div className="user-card"><div className="avatar">RS</div><div><strong>Rashi Singh</strong><small>Administrator</small></div><MoreHorizontal size={16} className="muted" /></div>
         </div>
       </aside>
       {mobileOpen && <button className="mobile-scrim" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
       <main className="main-area">
         <header className="topbar">
-          <div className="topbar-title"><button className="mobile-menu" aria-label="Open navigation" onClick={() => setMobileOpen(true)}><Menu size={20} /></button><span>Workspace</span><ChevronRight size={14} className="muted" /><strong>{currentLabel}</strong></div>
-          <div className="topbar-actions">
-            <div className="environment"><span className="status-live" />FastAPI · 127.0.0.1:8000 <span className="environment-divider">·</span> Ollama · Local</div>
-            <button className="icon-button" aria-label="Help"><CircleHelp size={18} /></button>
-            <button className="icon-button notification-button" aria-label="Notifications"><Bell size={18} /><span /></button>
-            <div className="top-avatar">RS</div>
-          </div>
+          <div className="topbar-title"><button className="mobile-menu" aria-label="Open navigation" onClick={() => setMobileOpen(true)}><Menu size={20} /></button><strong>{currentLabel}</strong></div>
+          <div className="topbar-actions"><div className="topbar-local">LOCAL WORKSPACE</div><div className="topbar-search-hint"><Search size={14} />Search <kbd>⌘K</kbd></div></div>
         </header>
         <div className="page-content">{children}</div>
       </main>
@@ -337,8 +340,16 @@ function FindingsPage({ findings, onSelect }: { findings: Finding[]; onSelect: (
   const [query, setQuery] = useState('');
   const [severity, setSeverity] = useState<Severity | 'All'>('All');
   const [status, setStatus] = useState<'All' | Finding['status']>('All');
-  const filtered = findings.filter((finding) => (severity === 'All' || finding.severity === severity) && (status === 'All' || finding.status === status) && `${finding.rule_name} ${finding.file} ${finding.frameworks.join(' ')}`.toLowerCase().includes(query.toLowerCase()));
-  return <div className="content-stack workstation-findings"><PageHeader eyebrow="Finding queue" title="Findings" description="Deterministic findings, code locations, and review state." action={<button className="button button-secondary"><Download size={14} />Export</button>} /><div className="finding-workflow"><span>Finding</span><ChevronRight size={13} /><span>Code</span><ChevronRight size={13} /><span>Rule</span><ChevronRight size={13} /><span>Compliance</span><ChevronRight size={13} /><span>Remediation</span><ChevronRight size={13} /><span>Diff</span><ChevronRight size={13} /><span>Apply</span><ChevronRight size={13} /><span>Rescan</span></div><div className="finding-toolbar"><div className="search-input"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search rule IDs, files, paths, frameworks" /><kbd>⌘ K</kbd></div><div className="filter-group"><SlidersHorizontal size={15} className="muted" /><select value={severity} onChange={(event) => setSeverity(event.target.value as Severity | 'All')} aria-label="Filter by severity"><option value="All">All severities</option><option>Critical</option><option>High</option><option>Medium</option><option>Low</option></select><select value={status} onChange={(event) => setStatus(event.target.value as 'All' | Finding['status'])} aria-label="Filter by status"><option value="All">All status</option><option>Open</option><option>Fixed</option><option>Accepted</option></select></div></div><div className="panel table-panel"><div className="table-meta"><span><strong>{filtered.length}</strong> findings in current scan</span><span><code>scan_8f31c2</code> · <span className="live-text">LOCAL DATA</span></span></div><div className="table-scroll"><table className="findings-table workstation-table"><thead><tr><th>Severity</th><th>Rule / finding</th><th>Code location</th><th>Framework</th><th>Evidence</th><th>Status</th><th aria-label="Actions" /></tr></thead><tbody>{filtered.map((finding) => <tr key={finding.id} onClick={() => onSelect(finding)}><td><SeverityBadge severity={finding.severity} /></td><td><div className="finding-cell"><div><code className="rule-id">{finding.id}</code><strong>{finding.rule_name}</strong></div></div></td><td><code>{finding.file}</code><span className="line-number">:{finding.line}</span><pre className="table-code">{finding.before.split('\n')[0]}</pre></td><td><span className="framework-pill">{finding.framework}</span></td><td><span className="evidence-text">detected {finding.detected}</span></td><td><span className={`status-badge ${finding.status.toLowerCase()}`}><span />{finding.status}</span></td><td><ChevronRight size={15} className="muted" /></td></tr>)}</tbody></table></div>{filtered.length === 0 && <div className="empty-state"><Search size={22} /><strong>No findings match these filters</strong><span>Try a rule ID, file path, or framework.</span></div>}<div className="table-footer"><span>Showing {filtered.length} of {findings.length} · click a row to inspect code and remediation</span><div><button className="pagination-button" disabled>Previous</button><button className="pagination-button active">1</button><button className="pagination-button">Next</button></div></div></div></div>;
+  const [sortBy, setSortBy] = useState<'severity' | 'file' | 'status'>('severity');
+  const severityOrder: Record<Severity, number> = { Critical: 0, High: 1, Medium: 2, Low: 3 };
+  const filtered = findings
+    .filter((finding) => (severity === 'All' || finding.severity === severity) && (status === 'All' || finding.status === status) && `${finding.id} ${finding.rule_name} ${finding.file} ${finding.frameworks.join(' ')}`.toLowerCase().includes(query.toLowerCase()))
+    .sort((left, right) => sortBy === 'severity'
+      ? severityOrder[left.severity] - severityOrder[right.severity]
+      : sortBy === 'file'
+        ? left.file.localeCompare(right.file)
+        : left.status.localeCompare(right.status));
+  return <div className="content-stack workstation-findings"><PageHeader eyebrow="Finding queue" title="Findings" description="Deterministic findings, code locations, and review state." action={<button className="button button-secondary"><Download size={14} />Export</button>} /><div className="finding-workflow"><span>Finding</span><ChevronRight size={13} /><span>Code</span><ChevronRight size={13} /><span>Rule</span><ChevronRight size={13} /><span>Compliance</span><ChevronRight size={13} /><span>Remediation</span><ChevronRight size={13} /><span>Diff</span><ChevronRight size={13} /><span>Apply</span><ChevronRight size={13} /><span>Rescan</span></div><div className="finding-toolbar"><div className="search-input"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search rule IDs, files, paths, frameworks" /><kbd>⌘ K</kbd></div><div className="filter-group"><SlidersHorizontal size={15} className="muted" /><select value={severity} onChange={(event) => setSeverity(event.target.value as Severity | 'All')} aria-label="Filter by severity"><option value="All">All severities</option><option>Critical</option><option>High</option><option>Medium</option><option>Low</option></select><select value={status} onChange={(event) => setStatus(event.target.value as 'All' | Finding['status'])} aria-label="Filter by status"><option value="All">All status</option><option>Open</option><option>Fixed</option><option>Accepted</option></select><select value={sortBy} onChange={(event) => setSortBy(event.target.value as typeof sortBy)} aria-label="Sort findings"><option value="severity">Sort: severity</option><option value="file">Sort: file</option><option value="status">Sort: status</option></select></div></div><div className="panel table-panel"><div className="table-meta"><span><strong>{filtered.length}</strong> findings in current scan</span><span><code>scan_8f31c2</code> · <span className="live-text">LOCAL DATA</span></span></div><div className="table-scroll"><table className="findings-table workstation-table"><thead><tr><th>Severity</th><th>Rule / finding</th><th>Code location</th><th>Framework</th><th>Evidence</th><th>Status</th><th aria-label="Actions" /></tr></thead><tbody>{filtered.map((finding) => <tr key={finding.id} onClick={() => onSelect(finding)}><td><SeverityBadge severity={finding.severity} /></td><td><div className="finding-cell"><div><code className="rule-id">{finding.id}</code><strong>{finding.rule_name}</strong></div></div></td><td><code>{finding.file}</code><span className="line-number">:{finding.line}</span><pre className="table-code">{finding.before.split('\n')[0]}</pre></td><td><span className="framework-pill">{finding.framework}</span></td><td><span className="evidence-text">detected {finding.detected}</span></td><td><span className={`status-badge ${finding.status.toLowerCase()}`}><span />{finding.status}</span></td><td><ChevronRight size={15} className="muted" /></td></tr>)}</tbody></table></div>{filtered.length === 0 && <div className="empty-state"><Search size={22} /><strong>No findings match these filters</strong><span>Try a rule ID, file path, or framework.</span></div>}<div className="table-footer"><span>Showing {filtered.length} of {findings.length} · click a row to inspect code and remediation</span><div><button className="pagination-button" disabled>Previous</button><button className="pagination-button active">1</button><button className="pagination-button">Next</button></div></div></div></div>;
 }
 
 function renderExplanation(explanation: string) {
@@ -528,7 +539,7 @@ function FindingDrawer({
       setAIError(detail || 'Local AI unavailable');
     } finally { setLoadingAI(false); }
   };
-  return <><motion.button className="drawer-scrim" onClick={onClose} aria-label="Close finding details" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} /><motion.aside className="detail-drawer" role="dialog" aria-modal="true" aria-label="Finding details" initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: 'spring', damping: 28, stiffness: 260 }}><div className="drawer-header"><div><span className="drawer-eyebrow">Finding {finding.id}</span><h2>{finding.rule_name}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={19} /></button></div><div className="drawer-content"><div className="drawer-badges"><SeverityBadge severity={finding.severity} /><span className={`status-badge ${finding.status.toLowerCase()}`}><span />{finding.status}</span></div><section className="drawer-section"><h3>Why this matters</h3><p>{finding.description}</p></section><section className="drawer-section"><h3>Location</h3><div className="location-card"><FileCode2 size={16} /><code>{finding.file}</code><span>Line {finding.line}</span><button className="icon-button small" aria-label="Copy location" onClick={() => void navigator.clipboard?.writeText(`${finding.file}:${finding.line}`)}><Copy size={14} /></button></div></section><section className="drawer-section"><h3>Compliance mapping</h3><div className="framework-list">{finding.frameworks.map((framework) => <span key={framework} className="framework-pill">{framework}</span>)}</div></section><section className="drawer-section remediation-preview"><div className="section-heading-row"><h3>Recommended remediation</h3><button className="text-button" onClick={copy}>{copied ? <><Check size={13} />Copied</> : <><Copy size={13} />Copy</>}</button></div><p>{finding.remediation}</p><pre>{finding.after}</pre></section><section className="drawer-section ai-explanation" aria-live="polite"><div className="section-heading-row"><div><h3>AI Security Explanation</h3><span className="ai-label">Local AI · Ollama</span></div>{explanation && <button className="text-button" onClick={() => void requestExplanation()} disabled={loadingAI}>{loadingAI ? 'Analyzing locally…' : 'Regenerate'}</button>}</div><p className="ai-disclaimer">AI-generated explanation based on AntiFine's deterministic finding.</p>{aiError ? <div className="ai-error"><strong>Local AI unavailable</strong><span>AntiFine's deterministic security analysis is still available.</span><button className="text-button" onClick={() => void requestExplanation()} disabled={loadingAI}>Retry</button></div> : explanation ? <div className="ai-response"><span className="ai-model">{explanation.model} · generated locally</span>{renderExplanation(explanation.explanation)}</div> : <button className="button button-secondary ai-explain-button" onClick={() => void requestExplanation()} disabled={loadingAI}>{loadingAI ? <><RefreshCw size={15} className="spin" />Analyzing locally…</> : <><Sparkles size={15} />Explain with Local AI</>}</button>}<button className="button button-secondary ai-ask-button" onClick={onAsk}><MessageSquareText size={14} />Ask AntiFine about this</button></section></div><div className="drawer-footer"><button className="button button-secondary" onClick={onClose}>Dismiss</button><button className="button button-primary" onClick={onRemediate}><Sparkles size={15} />Review fix</button></div></motion.aside></>;
+  return <><motion.button className="drawer-scrim" onClick={onClose} aria-label="Close finding details" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} /><motion.aside className="detail-drawer" role="dialog" aria-modal="true" aria-label="Finding details" initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: 'spring', damping: 28, stiffness: 260 }}><div className="drawer-header"><div><span className="drawer-eyebrow">Finding <code>{finding.id}</code></span><h2>{finding.rule_name}</h2><div className="drawer-meta-line"><span>{findingTechnology(finding.file)}</span><span>detected {finding.detected}</span></div></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={19} /></button></div><div className="drawer-content"><div className="drawer-badges"><SeverityBadge severity={finding.severity} /><span className={`status-badge ${finding.status.toLowerCase()}`}><span />{finding.status}</span></div><section className="drawer-section"><h3>Why detected</h3><p>{finding.description}</p></section><section className="drawer-section"><h3>Code</h3><div className="drawer-code"><div><span>{finding.file}</span><span>line {finding.line}</span></div><pre>{finding.before}</pre></div></section><section className="drawer-section"><h3>Location</h3><div className="location-card"><FileCode2 size={16} /><code>{finding.file}</code><span>Line {finding.line}</span><button className="icon-button small" aria-label="Copy location" onClick={() => void navigator.clipboard?.writeText(`${finding.file}:${finding.line}`)}><Copy size={14} /></button></div></section><section className="drawer-section"><h3>Compliance mapping</h3><div className="framework-list">{finding.frameworks.map((framework) => <span key={framework} className="framework-pill">{framework}</span>)}</div></section><section className="drawer-section remediation-preview"><div className="section-heading-row"><h3>Deterministic remediation</h3><button className="text-button" onClick={copy}>{copied ? <><Check size={13} />Copied</> : <><Copy size={13} />Copy</>}</button></div><p>{finding.remediation}</p><pre>{finding.after}</pre></section><section className="drawer-section ai-explanation" aria-live="polite"><div className="section-heading-row"><div><h3>Local AI</h3><span className="ai-label">Ollama · secondary explanation</span></div>{explanation && <button className="text-button" onClick={() => void requestExplanation()} disabled={loadingAI}>{loadingAI ? 'Analyzing locally…' : 'Regenerate'}</button>}</div><p className="ai-disclaimer">AI explains the deterministic finding; it does not change the rule result or remediation.</p>{aiError ? <div className="ai-error"><strong>Local AI unavailable</strong><span>AntiFine's deterministic security analysis is still available.</span><button className="text-button" onClick={() => void requestExplanation()} disabled={loadingAI}>Retry</button></div> : explanation ? <div className="ai-response"><span className="ai-model">{explanation.model} · generated locally</span>{renderExplanation(explanation.explanation)}</div> : <button className="button button-secondary ai-explain-button" onClick={() => void requestExplanation()} disabled={loadingAI}>{loadingAI ? <><RefreshCw size={15} className="spin" />Analyzing locally…</> : <><Sparkles size={15} />Explain with Local AI</>}</button>}<button className="button button-secondary ai-ask-button" onClick={onAsk}><MessageSquareText size={14} />Ask AntiFine about this</button></section></div><div className="drawer-footer"><button className="button button-secondary" onClick={onClose}>Dismiss</button><button className="button button-primary" onClick={onRemediate}><Sparkles size={15} />Review fix</button></div></motion.aside></>;
 }
 
 function RemediationModal({ finding, onClose, onApplied }: { finding: Finding; onClose: () => void; onApplied: () => void }) {
