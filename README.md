@@ -174,8 +174,9 @@ The explanation prompt also receives deterministic context from
 `src/ai/knowledge/rules.json`, looked up by
 `src/ai/knowledge_service.py`. Human-readable source notes live under
 `docs/ai/` for the scan workflow, Terraform, Docker, Kubernetes, secrets,
-compliance, and remediation behavior. This is a local rule catalog only; it
-does not add embeddings, a vector database, RAG, or autonomous behavior.
+compliance, and remediation behavior. This is a local rule catalog; it does
+not add embeddings, a vector database, or autonomous behavior. The separate
+Ask AntiFine workflow uses bounded lexical retrieval over this local content.
 
 ### Local retrieval-assisted AI
 AntiFine now retrieves relevant local rules and `docs/ai/` documentation before

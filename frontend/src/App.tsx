@@ -219,6 +219,16 @@ function AppShell({
   children: ReactNode;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [health, setHealth] = useState<Awaited<ReturnType<typeof fetchAIHealth>> | null>(null);
+  useEffect(() => {
+    void fetchAIHealth().then(setHealth).catch(() => setHealth({
+      enabled: false,
+      available: false,
+      provider: 'ollama',
+      model: 'qwen2.5:7b',
+      error: 'Backend unavailable',
+    }));
+  }, []);
   const currentLabel = navGroups.flatMap((group) => group.items).find((item) => item.id === page)?.label;
 
   const navigate = (nextPage: Page) => {
@@ -258,9 +268,9 @@ function AppShell({
         <div className="sidebar-bottom">
           <div className="local-status-footer">
             <span className="local-status-label">Local Engine</span>
-            <span className="local-status-value"><i className="status-live" />FastAPI · 127.0.0.1:8000</span>
+            <span className="local-status-value"><i className={health ? 'status-live' : 'status-idle'} />FastAPI · 127.0.0.1:8000</span>
             <span className="local-status-label">Local AI</span>
-            <span className="local-status-value muted"><i className="status-idle" />Ollama · Local</span>
+            <span className="local-status-value muted"><i className={health?.available ? 'status-live' : 'status-idle'} />{health?.available ? `Ollama · ${health.model}` : health?.enabled === false ? 'Ollama · Offline' : 'Ollama · Checking'}</span>
           </div>
           <button className="nav-item"><Settings2 size={17} /><span>Settings</span></button>
         </div>
@@ -282,17 +292,18 @@ function PageHeader({ eyebrow, title, description, action }: { eyebrow?: string;
 }
 
 function Overview({ findings, onNavigate, onSelect }: { findings: Finding[]; onNavigate: (page: Page) => void; onSelect: (finding: Finding) => void }) {
-  const counts = useMemo(() => findings.reduce<Record<Severity, number>>((acc, finding) => { acc[finding.severity] += 1; return acc; }, { Critical: 0, High: 0, Medium: 0, Low: 0 }), [findings]);
+  const openFindings = useMemo(() => findings.filter((finding) => finding.status === 'Open'), [findings]);
+  const counts = useMemo(() => openFindings.reduce<Record<Severity, number>>((acc, finding) => { acc[finding.severity] += 1; return acc; }, { Critical: 0, High: 0, Medium: 0, Low: 0 }), [openFindings]);
   return <div className="content-stack workstation-overview">
     <PageHeader eyebrow="Local workspace" title="Overview" description="Current scan state and findings requiring engineering review." action={<button className="button button-primary" onClick={() => onNavigate('scan')}><Play size={14} fill="currentColor" />Run scan</button>} />
     <section className="ops-strip" aria-label="Operational state">
       <div><span className="ops-label">LAST SCAN</span><strong>IaC Config Audit</strong><code>scan_8f31c2</code><span>12 min ago</span></div>
       <div><span className="ops-label">ENGINE</span><strong className="state-ok">COMPLETE</strong><span>128 files · 6 findings</span></div>
-      <div><span className="ops-label">SERVICES</span><span className="service-state"><i />FastAPI · 127.0.0.1:8000</span><span className="service-state"><i />Ollama · Local</span></div>
+      <div><span className="ops-label">SERVICES</span><span className="service-state">FastAPI · 127.0.0.1:8000</span><span className="service-state">See local status in shell</span></div>
     </section>
     <section className="overview-findings panel">
       <div className="console-heading"><div><span className="section-kicker">WORK QUEUE</span><h2>Open findings</h2></div><div className="console-summary"><span className="severity-count critical">{counts.Critical} critical</span><span className="severity-count high">{counts.High} high</span><button className="text-button" onClick={() => onNavigate('findings')}>Open findings <ArrowUpRight size={13} /></button></div></div>
-      <div className="overview-finding-list">{findings.filter((finding) => finding.status === 'Open').slice(0, 5).map((finding) => <button className="overview-finding-row" key={finding.id} onClick={() => onSelect(finding)}><SeverityBadge severity={finding.severity} /><code className="rule-id">{finding.id}</code><strong>{finding.rule_name}</strong><span className="file-ref">{finding.file}:{finding.line}</span><span className="framework-ref">{finding.framework}</span><ChevronRight size={14} /></button>)}</div>
+      <div className="overview-finding-list">{openFindings.slice(0, 5).map((finding) => <button className="overview-finding-row" key={finding.id} onClick={() => onSelect(finding)}><SeverityBadge severity={finding.severity} /><code className="rule-id">{finding.id}</code><strong>{finding.rule_name}</strong><span className="file-ref">{finding.file}:{finding.line}</span><span className="framework-ref">{finding.framework}</span><ChevronRight size={14} /></button>)}</div>
     </section>
     <div className="overview-lower-grid">
       <section className="console-panel"><div className="console-heading"><div><span className="section-kicker">SCAN STATE</span><h2>Latest activity</h2></div><button className="text-button" onClick={() => onNavigate('history')}>History <ArrowUpRight size={13} /></button></div><div className="activity-list compact-activity"><div className="activity-row"><div className="activity-status success"><Check size={13} /></div><div><strong>IaC audit completed</strong><span>6 findings · deterministic engine</span></div><time>12 min ago</time></div><div className="activity-row"><div className="activity-status"><GitBranch size={13} /></div><div><strong>Repository scan ready</strong><span>Local workspace · read-only</span></div><time>2 hr ago</time></div></div></section>
@@ -481,9 +492,9 @@ function AskAntiFinePage({
     </div>
     <div className={`assistant-status ${available ? 'assistant-online' : 'assistant-offline'}`}>
       {available ? <Bot size={17} /> : <WifiOff size={17} />}
-      <div><strong>{available ? 'Local AI ready' : health ? 'Ollama unavailable' : 'Checking local AI…'}</strong><span>Answers are generated locally using Ollama and AntiFine’s local knowledge.</span></div>
+      <div><strong>{available ? 'Local AI ready' : health?.enabled === false ? 'Local AI disabled' : health ? 'Ollama unavailable' : 'Checking local AI…'}</strong><span>Answers are generated locally using Ollama and AntiFine’s local knowledge.</span></div>
       <span className="assistant-model">{health?.provider ?? 'ollama'} · {health?.model ?? 'qwen2.5:7b'}</span>
-      {!available && <button className="text-button" onClick={() => void checkHealth()}>Retry connection</button>}
+      {!available && health?.enabled !== false && <button className="text-button" onClick={() => void checkHealth()}>Retry connection</button>}
     </div>
     {context && <div className="assistant-context"><div><span>Analyzing</span><strong>{context.rule_id || context.finding_id}</strong></div><SeverityBadge severity={normalizeSeverity(context.severity)} /><code>{context.technology} · {context.finding_id}</code><button className="icon-button small" aria-label="Remove finding context" onClick={onClearContext}><X size={14} /></button></div>}
     <section className="panel assistant-panel">
@@ -627,11 +638,17 @@ export default function App() {
   const askAboutFinding = (finding: Finding) => {
     setAssistantContext({
       finding_id: finding.id,
-      rule_id: finding.id,
+      rule_id: undefined,
       title: finding.rule_name,
       severity: finding.severity,
       technology: finding.file.endsWith('.tf') ? 'terraform' : finding.file.endsWith('.yaml') || finding.file.endsWith('.yml') ? 'kubernetes' : 'docker',
       framework: finding.framework,
+      frameworks: finding.frameworks,
+      file: finding.file,
+      line: finding.line,
+      status: finding.status,
+      description: finding.description,
+      remediation: finding.remediation,
       code_context: finding.before,
     });
     setAssistantQuestion('Explain this finding and why AntiFine classified it this way.');
@@ -640,5 +657,5 @@ export default function App() {
   };
   const completeScan = (nextFindings: Finding[]) => { setFindings(nextFindings); setPage('findings'); };
   const markApplied = () => { if (remediationFinding) setFindings((current) => current.map((item) => item.id === remediationFinding.id ? { ...item, status: 'Fixed' } : item)); };
-  return <AppShell page={page} setPage={(nextPage) => { if (nextPage !== 'ai') setAssistantContext(undefined); setPage(nextPage); }}><AnimatePresence mode="wait"><motion.div key={page} className="page-transition" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.16 }}>{page === 'overview' && <Overview findings={findings} onNavigate={setPage} onSelect={selectFinding} />}{page === 'scan' && <ScanWorkspace onComplete={completeScan} target={target} setTarget={setTarget} />}{page === 'findings' && <FindingsPage findings={findings} onSelect={selectFinding} />}{page === 'compliance' && <CompliancePage />}{page === 'secrets' && <SecretsPage />}{page === 'history' && <HistoryPage />}{page === 'reports' && <ReportsPage />}{page === 'ai' && <AskAntiFinePage context={assistantContext} initialQuestion={assistantQuestion} onClearContext={() => setAssistantContext(undefined)} onNewChat={() => { setAssistantContext(undefined); setAssistantQuestion(''); }} />}</motion.div></AnimatePresence><AnimatePresence>{selectedFinding && !remediationFinding && <FindingDrawer finding={selectedFinding} onClose={() => setSelectedFinding(null)} onRemediate={() => setRemediationFinding(selectedFinding)} onAsk={() => askAboutFinding(selectedFinding)} explanationCache={explanationCache} onExplanation={(id, result) => setExplanationCache((current) => ({ ...current, [id]: result }))} />}{remediationFinding && <RemediationModal finding={remediationFinding} onClose={() => setRemediationFinding(null)} onApplied={markApplied} />}</AnimatePresence></AppShell>;
+  return <AppShell page={page} setPage={(nextPage) => { if (nextPage !== 'ai') { setAssistantContext(undefined); setAssistantQuestion(''); } setPage(nextPage); }}><AnimatePresence mode="wait"><motion.div key={page} className="page-transition" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.16 }}>{page === 'overview' && <Overview findings={findings} onNavigate={setPage} onSelect={selectFinding} />}{page === 'scan' && <ScanWorkspace onComplete={completeScan} target={target} setTarget={setTarget} />}{page === 'findings' && <FindingsPage findings={findings} onSelect={selectFinding} />}{page === 'compliance' && <CompliancePage />}{page === 'secrets' && <SecretsPage />}{page === 'history' && <HistoryPage />}{page === 'reports' && <ReportsPage />}{page === 'ai' && <AskAntiFinePage context={assistantContext} initialQuestion={assistantQuestion} onClearContext={() => { setAssistantContext(undefined); setAssistantQuestion(''); }} onNewChat={() => { setAssistantContext(undefined); setAssistantQuestion(''); }} />}</motion.div></AnimatePresence><AnimatePresence>{selectedFinding && !remediationFinding && <FindingDrawer finding={selectedFinding} onClose={() => setSelectedFinding(null)} onRemediate={() => setRemediationFinding(selectedFinding)} onAsk={() => askAboutFinding(selectedFinding)} explanationCache={explanationCache} onExplanation={(id, result) => setExplanationCache((current) => ({ ...current, [id]: result }))} />}{remediationFinding && <RemediationModal finding={remediationFinding} onClose={() => setRemediationFinding(null)} onApplied={markApplied} />}</AnimatePresence></AppShell>;
 }

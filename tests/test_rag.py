@@ -346,6 +346,23 @@ class RagTests(unittest.TestCase):
         self.assertIn("ASSISTANT: It is critical because SSH is exposed.", rendered)
         self.assertIn("CURRENT QUESTION\nDoes it affect PCI-DSS?", rendered)
 
+    def test_context_budget_preserves_question_and_safety_instructions(self) -> None:
+        sources = [
+            KnowledgeChunk(
+                id=f"source-{index}",
+                title=f"Source {index}",
+                source=f"docs/{index}.md",
+                technology=None,
+                frameworks=(),
+                text="evidence " * 1200,
+                rule_id=f"rule-{index}",
+            )
+            for index in range(5)
+        ]
+        rendered = build_context("What changed?", sources)
+        self.assertIn("CURRENT QUESTION\nWhat changed?", rendered)
+        self.assertIn("Use only supplied AntiFine facts", rendered)
+
     def test_conversation_history_is_bounded_and_sanitized(self) -> None:
         history = [
             AIMessage(role="user", content=f"token=AKIA1234567890ABCDEF {index}")

@@ -44,11 +44,17 @@ export interface AskResponse {
 
 export interface AskContext {
   finding_id: string;
-  rule_id: string;
+  rule_id?: string;
   title: string;
   severity: string;
   technology: string;
-  framework: string;
+  framework?: string;
+  frameworks?: string[];
+  file?: string;
+  line?: number;
+  status?: string;
+  description?: string;
+  remediation?: string;
   code_context?: string;
 }
 
@@ -71,8 +77,12 @@ export const askAntiFine = async (question: string, context?: AskContext, messag
         title: context.title,
         severity: context.severity,
         technology: context.technology,
-        file: context.finding_id,
-        frameworks: context.framework ? [context.framework] : [],
+        file: context.file ?? context.finding_id,
+        line: context.line,
+        frameworks: context.frameworks ?? (context.framework ? [context.framework] : []),
+        status: context.status,
+        description: context.description,
+        remediation: context.remediation,
       },
     } : undefined,
     messages: messages.slice(-10).map(({ role, content }) => ({ role, content: content.slice(0, 1200) })),

@@ -38,6 +38,10 @@ def _value(value: object, limit: int = 1200) -> str:
     return sanitize_text(str(value), limit=limit)
 
 
+def _normalize_framework(value: str) -> str:
+    return re.sub(r"[\s-]+", " ", value.strip().lower())
+
+
 def _finding_context_lines(finding: object) -> list[str]:
     fields = (
         ("Rule ID", getattr(finding, "rule_id", None)),
@@ -101,6 +105,15 @@ def format_ai_context(context: AIContext | str | None) -> tuple[str, str]:
                         f"Framework: {_value(context.compliance.framework)}",
                         f"Controls: {', '.join(_value(item) for item in context.compliance.controls)}",
                         f"Status: {_value(context.compliance.status)}",
+                        (
+                            "Findings:\n"
+                            + "\n".join(
+                                "\n".join(_finding_context_lines(item))
+                                for item in context.compliance.findings
+                            )
+                        )
+                        if context.compliance.findings
+                        else "",
                     ],
                 )
             )
@@ -133,15 +146,17 @@ def requested_unmapped_frameworks(
     """Return named frameworks that are not authoritative for a finding."""
     if not isinstance(context, AIContext) or context.source != "finding" or not context.finding:
         return []
-    authoritative = " ".join(context.finding.frameworks).lower()
+    authoritative = " ".join(_normalize_framework(item) for item in context.finding.frameworks)
     retrieved_frameworks = " ".join(
-        framework for chunk in retrieved for framework in chunk.frameworks
-    ).lower()
+        _normalize_framework(framework)
+        for chunk in retrieved
+        for framework in chunk.frameworks
+    )
     return [
         name for name, pattern in _FRAMEWORK_PATTERNS.items()
         if pattern.search(question)
-        and name.lower() not in authoritative
-        and name.lower() not in retrieved_frameworks
+        and _normalize_framework(name) not in authoritative
+        and _normalize_framework(name) not in retrieved_frameworks
     ]
 
 
@@ -158,7 +173,11 @@ def requested_framework(question: str) -> str | None:
     if not match:
         return None
     candidate = match.group(1).strip(" ._-")
-    return None if candidate.lower() in _GENERIC_COMPLIANCE_TERMS else candidate
+    if candidate.lower() in _GENERIC_COMPLIANCE_TERMS or candidate.lower().endswith(
+        (" of this finding", " to this finding", " with this finding")
+    ):
+        return None
+    return candidate
 
 
 def determine_compliance_status(
@@ -172,11 +191,14 @@ def determine_compliance_status(
     requested = requested_framework(question)
     if not requested:
         return "unknown", None
-    authoritative = " ".join(context.finding.frameworks).lower()
+    authoritative = " ".join(_normalize_framework(item) for item in context.finding.frameworks)
     retrieved_frameworks = " ".join(
-        framework for chunk in retrieved for framework in chunk.frameworks
-    ).lower()
-    if requested.lower() in authoritative or requested.lower() in retrieved_frameworks:
+        _normalize_framework(framework)
+        for chunk in retrieved
+        for framework in chunk.frameworks
+    )
+    requested_normalized = _normalize_framework(requested)
+    if requested_normalized in authoritative or requested_normalized in retrieved_frameworks:
         return "mapped", requested
     return "not_mapped", requested
 
@@ -232,7 +254,7 @@ def build_context(
 ) -> str:
     """Separate authoritative AntiFine data from general retrieved context."""
     sources = "\n\n".join(
-        f"[Source: {chunk.source} | {chunk.title}]\n{sanitize_text(chunk.text, limit=3500)}"
+        f"[Source: {chunk.source} | {chunk.title}]\n{sanitize_text(chunk.text, limit=700)}"
         for chunk in retrieved
     ) or "No matching AntiFine knowledge was retrieved."
     finding_text = "None supplied"
@@ -247,6 +269,10 @@ def build_context(
         )
     context_source, supplied_context = format_ai_context(structured_context)
     authoritative_compliance = "None supplied"
+    if finding is not None and finding.frameworks:
+        authoritative_compliance = ", ".join(
+            _value(item) for item in finding.frameworks
+        )
     if isinstance(structured_context, AIContext) and structured_context.source == "finding":
         finding_context = structured_context.finding
         if finding_context and finding_context.frameworks:
@@ -294,8 +320,24 @@ def build_context(
         "recommendations. State only that AntiFine has no supplied mapping; "
         "generic security guidance must not mention that framework."
     )
-    return context[:MAX_CONTEXT]
+    if len(context) <= MAX_CONTEXT:
+        return context
+    marker = "\nRETRIEVED ANTIFINE KNOWLEDGE (reference context)\n"
+    head, _, tail = context.partition(marker)
+    source_text, safety_marker, safety_text = tail.partition(
+        "\nUse only supplied AntiFine facts"
+    )
+    suffix = marker + safety_marker + safety_text
+    source_budget = MAX_CONTEXT - len(head) - len(suffix)
+    if source_budget <= 0:
+        # Preserve the current question and final safety instructions even if
+        # unusually large structured context consumes the entire budget.
+        return head[-(MAX_CONTEXT - len(suffix)):] + suffix
+    return head + marker + source_text[:source_budget] + safety_marker + safety_text
 
 
 def source_metadata(retrieved: list[KnowledgeChunk]) -> list[dict[str, str]]:
-    return [{"title": chunk.title, "source": chunk.source} for chunk in retrieved]
+    return [
+        {"title": chunk.title, "source": chunk.source, "rule_id": chunk.rule_id or ""}
+        for chunk in retrieved
+    ]
