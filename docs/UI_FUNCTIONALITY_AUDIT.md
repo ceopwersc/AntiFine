@@ -26,6 +26,7 @@ Backend: FastAPI at `127.0.0.1:8000`
 | Ask AntiFine | Disabled Ollama | Disabled state incorrectly offered a retry in earlier behavior. | P1 | Preserved configured-off state without retry. | WORKING: disabled state, zero retry buttons |
 | Ask AntiFine | Clipboard copy | Success state could be shown when clipboard was unavailable or rejected. | P2 | Added capability check and explicit error handling. | WORKING: success only after write |
 | Settings | Table density | No persistence surface existed. | P2 | Added a local-browser preference with `localStorage` persistence. | WORKING: survives reload |
+| Remediation modal | Apply result | Any successful HTTP response was previously treated as a fixed finding, even if verification findings remained. | P0 | The UI now uses the deterministic response `findings_count`; zero means verified, non-zero remains open and is shown as verification failure. | WORKING: real fixture returned 200, backup path, verification completed, and status changed only after zero remaining findings |
 
 ## Routes tested
 
@@ -49,6 +50,7 @@ The application uses client-side page state rather than URL routes. These views 
 - Finding Drawer → Ask AntiFine context handoff.
 - Reports → Markdown generation and SARIF export; both returned HTTP 200 and SARIF downloaded.
 - Settings → density change → page reload → value persisted.
+- Remediation → deterministic API → backup and verification result → finding status update.
 - Ask AntiFine with Ollama disabled → disabled state rendered without retry.
 
 The only browser console error observed during the audit was the expected browser resource error for the intentionally invalid scan request (`POST /api/scan/iac` returning HTTP 422). Successful-path checks produced no application console errors.

@@ -120,7 +120,14 @@ export const runScan = async (target: string, type: string) => {
 };
 
 export const remediateFinding = async (target: string, ruleName: string) => {
-  return (await apiClient.post('/scan/iac/remediate', {
+  return (await apiClient.post<{
+    status: string;
+    target: string;
+    backup: string;
+    action: string;
+    findings_count: number;
+    findings: Array<{ rule_name: string; severity: string }>;
+  }>('/scan/iac/remediate', {
     target_path: target,
     rule_name: ruleName,
   })).data;
