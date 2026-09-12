@@ -22,7 +22,6 @@ import {
   LayoutDashboard,
   Menu,
   MessageSquareText,
-  MoreHorizontal,
   Play,
   Radar,
   RefreshCw,
@@ -41,7 +40,7 @@ import {
 import { askAntiFine, explainFinding, explainRemediation, fetchAIHealth, generateReport, remediateFinding, runScan, type AskContext, type AskMessage, type AskResponse, type FindingExplanation, type RemediationExplanation } from './api';
 
 type Severity = 'Critical' | 'High' | 'Medium' | 'Low';
-type Page = 'overview' | 'scan' | 'findings' | 'compliance' | 'secrets' | 'history' | 'reports' | 'ai';
+type Page = 'overview' | 'scan' | 'findings' | 'compliance' | 'secrets' | 'history' | 'reports' | 'ai' | 'settings';
 
 interface Finding {
   id: string;
@@ -53,6 +52,7 @@ interface Finding {
   line: number;
   description: string;
   remediation: string;
+  compliance_framework?: string;
   before: string;
   after: string;
   status: 'Open' | 'Fixed' | 'Accepted';
@@ -272,14 +272,14 @@ function AppShell({
             <span className="local-status-label">Local AI</span>
             <span className="local-status-value muted"><i className={health?.available ? 'status-live' : 'status-idle'} />{health?.available ? `Ollama · ${health.model}` : health?.enabled === false ? 'Ollama · Offline' : 'Ollama · Checking'}</span>
           </div>
-          <button className="nav-item"><Settings2 size={17} /><span>Settings</span></button>
+          <button className={`nav-item ${page === 'settings' ? 'nav-item-active' : ''}`} onClick={() => navigate('settings')} aria-current={page === 'settings' ? 'page' : undefined}><Settings2 size={17} /><span>Settings</span></button>
         </div>
       </aside>
       {mobileOpen && <button className="mobile-scrim" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
       <main className="main-area">
         <header className="topbar">
           <div className="topbar-title"><button className="mobile-menu" aria-label="Open navigation" onClick={() => setMobileOpen(true)}><Menu size={20} /></button><strong>{currentLabel}</strong></div>
-          <div className="topbar-actions"><div className="topbar-local">LOCAL WORKSPACE</div><div className="topbar-search-hint"><Search size={14} />Search <kbd>⌘K</kbd></div></div>
+          <div className="topbar-actions"><div className="topbar-local">LOCAL WORKSPACE</div></div>
         </header>
         <div className="page-content">{children}</div>
       </main>
@@ -326,22 +326,28 @@ function ScanWorkspace({ onComplete, target, setTarget }: { onComplete: (finding
       const result = await runScan(target.trim(), scanType);
       const returned = Array.isArray(result?.findings) ? result.findings : [];
       if (returned.length) onComplete(returned.map((item: Partial<Finding>, index: number) => {
-        const fallback = mockFindings[index % mockFindings.length];
         return {
-          ...fallback,
           ...item,
           id: item.id ?? `AF-${1100 + index}`,
           severity: normalizeSeverity(item.severity),
-          frameworks: item.frameworks?.length ? item.frameworks : fallback.frameworks,
-          framework: item.framework ?? fallback.framework,
+          frameworks: item.frameworks?.length ? item.frameworks : item.framework ? [item.framework] : item.compliance_framework ? [item.compliance_framework] : [],
+          framework: item.framework ?? item.compliance_framework ?? 'Unmapped',
           file: item.file ?? target,
+          line: item.line ?? 0,
+          description: item.description ?? item.rule_name ?? 'No description supplied by the scan engine.',
+          remediation: item.remediation ?? 'No deterministic remediation supplied.',
+          before: item.before ?? '',
+          after: item.after ?? '',
+          status: item.status ?? 'Open',
+          detected: item.detected ?? 'just now',
         };
       }));
-      else onComplete(mockFindings);
-      setScanLog((current) => [...current, 'Policy checks complete.', `Scan complete · ${returned.length || mockFindings.length} findings`]); setDone(true);
-    } catch {
-      onComplete(mockFindings);
-      setScanLog((current) => [...current, 'Backend unavailable · loaded representative scan data.', `Scan complete · ${mockFindings.length} findings`]); setDone(true);
+      else onComplete([]);
+      setScanLog((current) => [...current, 'Policy checks complete.', `Scan complete · ${returned.length} findings`]); setDone(true);
+    } catch (requestError: any) {
+      const detail = requestError?.response?.data?.detail;
+      setError(detail || 'The scan backend could not complete this request.');
+      setScanLog((current) => [...current, 'Scan failed · no findings were loaded.']);
     } finally { setScanning(false); }
   };
   return <div className="content-stack"><PageHeader eyebrow="Security workspace" title="Run a scan" description="Inspect infrastructure-as-code and web assets before they reach production." /><div className="scan-layout"><section className="panel scan-config"><div className="panel-heading"><div><h2>Scan configuration</h2><p>Define the scope and policy set for this run.</p></div><div className="secure-label"><ShieldCheck size={14} /> Secure</div></div><label className="field-label" htmlFor="target">Target path or URL</label><div className="input-with-icon"><FileCode2 size={17} /><input id="target" value={target} onChange={(event) => setTarget(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void startScan(); }} placeholder="e.g. infra/production.tf" /></div><div className="target-suggestions"><button onClick={() => setTarget('infra/production.tf')}>infra/production.tf</button><button onClick={() => setTarget('deployments/worker.yaml')}>deployments/worker.yaml</button><button onClick={() => setTarget('services/api/Dockerfile')}>Dockerfile</button></div><label className="field-label" htmlFor="protocol">Audit protocol</label><div className="select-wrap"><Radar size={17} /><select id="protocol" value={scanType} onChange={(event) => setScanType(event.target.value)}><option>IaC Config Audit</option><option>SSRF Web Audit</option></select><ChevronDown size={15} /></div><div className="scan-options"><div><strong>Policy packs</strong><span>CIS Benchmarks, NIST, SOC 2</span></div><div className="toggle on"><span /></div></div><div className="scan-options"><div><strong>Secret detection</strong><span>High-confidence patterns + entropy</span></div><div className="toggle on"><span /></div></div><button className="button button-primary scan-button" onClick={() => void startScan()} disabled={scanning || !target.trim()}>{scanning ? <><RefreshCw size={16} className="spin" />Scanning target…</> : <><Play size={16} fill="currentColor" />Initialize scan</>}</button>{error && <div className="inline-error"><AlertTriangle size={15} />{error}</div>}</section><section className={`panel terminal-panel ${scanning ? 'terminal-active' : ''}`}><div className="terminal-header"><span><span className="terminal-dot red" /><span className="terminal-dot yellow" /><span className="terminal-dot green" /></span><span className="terminal-title"><Terminal size={14} /> scan output</span><span className="terminal-live">{scanning ? 'LIVE' : done ? 'COMPLETE' : 'IDLE'}</span></div><div className="terminal-body">{scanLog.map((line, index) => <div key={`${line}-${index}`} className={line.includes('complete') || line.includes('findings') ? 'terminal-success' : index === scanLog.length - 1 && scanning ? 'terminal-current' : ''}><span className="terminal-prefix">{index === scanLog.length - 1 && scanning ? '›' : '✓'}</span>{line}</div>)}{scanning && <div className="terminal-cursor">▌</div>}</div><div className="terminal-footer"><span><Activity size={14} /> Engine v2.4.1</span><span>Run ID: {done ? 'scan_8f31c2' : '—'}</span></div></section></div><div className="scan-trust-row"><ShieldCheck size={17} /><span>Scans are read-only by default.</span><span className="muted">Any remediation is explicit, deterministic, and reviewable before applying.</span></div></div>;
@@ -360,7 +366,7 @@ function FindingsPage({ findings, onSelect }: { findings: Finding[]; onSelect: (
       : sortBy === 'file'
         ? left.file.localeCompare(right.file)
         : left.status.localeCompare(right.status));
-  return <div className="content-stack workstation-findings"><PageHeader eyebrow="Finding queue" title="Findings" description="Deterministic findings, code locations, and review state." action={<button className="button button-secondary"><Download size={14} />Export</button>} /><div className="finding-workflow"><span>Finding</span><ChevronRight size={13} /><span>Code</span><ChevronRight size={13} /><span>Rule</span><ChevronRight size={13} /><span>Compliance</span><ChevronRight size={13} /><span>Remediation</span><ChevronRight size={13} /><span>Diff</span><ChevronRight size={13} /><span>Apply</span><ChevronRight size={13} /><span>Rescan</span></div><div className="finding-toolbar"><div className="search-input"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search rule IDs, files, paths, frameworks" /><kbd>⌘ K</kbd></div><div className="filter-group"><SlidersHorizontal size={15} className="muted" /><select value={severity} onChange={(event) => setSeverity(event.target.value as Severity | 'All')} aria-label="Filter by severity"><option value="All">All severities</option><option>Critical</option><option>High</option><option>Medium</option><option>Low</option></select><select value={status} onChange={(event) => setStatus(event.target.value as 'All' | Finding['status'])} aria-label="Filter by status"><option value="All">All status</option><option>Open</option><option>Fixed</option><option>Accepted</option></select><select value={sortBy} onChange={(event) => setSortBy(event.target.value as typeof sortBy)} aria-label="Sort findings"><option value="severity">Sort: severity</option><option value="file">Sort: file</option><option value="status">Sort: status</option></select></div></div><div className="panel table-panel"><div className="table-meta"><span><strong>{filtered.length}</strong> findings in current scan</span><span><code>scan_8f31c2</code> · <span className="live-text">LOCAL DATA</span></span></div><div className="table-scroll"><table className="findings-table workstation-table"><thead><tr><th>Severity</th><th>Rule / finding</th><th>Code location</th><th>Framework</th><th>Evidence</th><th>Status</th><th aria-label="Actions" /></tr></thead><tbody>{filtered.map((finding) => <tr key={finding.id} onClick={() => onSelect(finding)}><td><SeverityBadge severity={finding.severity} /></td><td><div className="finding-cell"><div><code className="rule-id">{finding.id}</code><strong>{finding.rule_name}</strong></div></div></td><td><code>{finding.file}</code><span className="line-number">:{finding.line}</span><pre className="table-code">{finding.before.split('\n')[0]}</pre></td><td><span className="framework-pill">{finding.framework}</span></td><td><span className="evidence-text">detected {finding.detected}</span></td><td><span className={`status-badge ${finding.status.toLowerCase()}`}><span />{finding.status}</span></td><td><ChevronRight size={15} className="muted" /></td></tr>)}</tbody></table></div>{filtered.length === 0 && <div className="empty-state"><Search size={22} /><strong>No findings match these filters</strong><span>Try a rule ID, file path, or framework.</span></div>}<div className="table-footer"><span>Showing {filtered.length} of {findings.length} · click a row to inspect code and remediation</span><div><button className="pagination-button" disabled>Previous</button><button className="pagination-button active">1</button><button className="pagination-button">Next</button></div></div></div></div>;
+  return <div className="content-stack workstation-findings"><PageHeader eyebrow="Finding queue" title="Findings" description="Deterministic findings, code locations, and review state." /><div className="finding-workflow"><span>Finding</span><ChevronRight size={13} /><span>Code</span><ChevronRight size={13} /><span>Rule</span><ChevronRight size={13} /><span>Compliance</span><ChevronRight size={13} /><span>Remediation</span><ChevronRight size={13} /><span>Diff</span><ChevronRight size={13} /><span>Apply</span><ChevronRight size={13} /><span>Rescan</span></div><div className="finding-toolbar"><div className="search-input"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search rule IDs, files, paths, frameworks" /><kbd>⌘ K</kbd></div><div className="filter-group"><SlidersHorizontal size={15} className="muted" /><select value={severity} onChange={(event) => setSeverity(event.target.value as Severity | 'All')} aria-label="Filter by severity"><option value="All">All severities</option><option>Critical</option><option>High</option><option>Medium</option><option>Low</option></select><select value={status} onChange={(event) => setStatus(event.target.value as 'All' | Finding['status'])} aria-label="Filter by status"><option value="All">All status</option><option>Open</option><option>Fixed</option><option>Accepted</option></select><select value={sortBy} onChange={(event) => setSortBy(event.target.value as typeof sortBy)} aria-label="Sort findings"><option value="severity">Sort: severity</option><option value="file">Sort: file</option><option value="status">Sort: status</option></select></div></div><div className="panel table-panel"><div className="table-meta"><span><strong>{filtered.length}</strong> findings in current scan</span><span><code>scan_8f31c2</code> · <span className="live-text">LOCAL DATA</span></span></div><div className="table-scroll"><table className="findings-table workstation-table"><thead><tr><th>Severity</th><th>Rule / finding</th><th>Code location</th><th>Framework</th><th>Evidence</th><th>Status</th><th aria-label="Actions" /></tr></thead><tbody>{filtered.map((finding) => <tr key={finding.id} tabIndex={0} role="button" onClick={() => onSelect(finding)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(finding); } }}><td><SeverityBadge severity={finding.severity} /></td><td><div className="finding-cell"><div><code className="rule-id">{finding.id}</code><strong>{finding.rule_name}</strong></div></div></td><td><code>{finding.file}</code><span className="line-number">:{finding.line}</span><pre className="table-code">{finding.before.split('\n')[0]}</pre></td><td><span className="framework-pill">{finding.framework}</span></td><td><span className="evidence-text">detected {finding.detected}</span></td><td><span className={`status-badge ${finding.status.toLowerCase()}`}><span />{finding.status}</span></td><td><ChevronRight size={15} className="muted" /></td></tr>)}</tbody></table></div>{filtered.length === 0 && <div className="empty-state"><Search size={22} /><strong>No findings match these filters</strong><span>Try a rule ID, file path, or framework.</span></div>}<div className="table-footer"><span>Showing {filtered.length} of {findings.length} · click a row to inspect code and remediation</span><div><button className="pagination-button" disabled>Previous</button><button className="pagination-button active">1</button><button className="pagination-button" disabled>Next</button></div></div></div></div>;
 }
 
 function renderExplanation(explanation: string) {
@@ -383,6 +389,13 @@ function renderMarkdown(markdown: string) {
   const nodes: ReactNode[] = [];
   let inCode = false;
   let codeLines: string[] = [];
+  let listItems: ReactNode[] = [];
+  const flushList = () => {
+    if (listItems.length) {
+      nodes.push(<ul key={`list-${nodes.length}`}>{listItems}</ul>);
+      listItems = [];
+    }
+  };
   lines.forEach((line, index) => {
     if (line.trim().startsWith('```')) {
       if (inCode) {
@@ -399,13 +412,16 @@ function renderMarkdown(markdown: string) {
     const content = line.replace(/^\s*[-*]\s/, '');
     if (!line.trim()) return;
     if (/^#{1,3}\s/.test(line)) {
+      flushList();
       nodes.push(<h4 key={index}>{line.replace(/^#{1,3}\s/, '')}</h4>);
     } else if (/^\s*[-*]\s/.test(line)) {
-      nodes.push(<li key={index}>{renderInline(content)}</li>);
+      listItems.push(<li key={index}>{renderInline(content)}</li>);
     } else {
+      flushList();
       nodes.push(<p key={index}>{renderInline(content)}</p>);
     }
   });
+  flushList();
   return nodes;
 }
 
@@ -479,9 +495,17 @@ function AskAntiFinePage({
   };
   const newChat = () => { setMessages([]); setError(''); setQuestion(''); onNewChat(); };
   const copyAnswer = async (content: string) => {
-    await navigator.clipboard?.writeText(content);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1500);
+    if (!navigator.clipboard) {
+      setError('Copy is unavailable in this browser context.');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setError('AntiFine could not copy this response.');
+    }
   };
   const available = health?.available === true;
 
@@ -605,24 +629,50 @@ function RemediationModal({ finding, onClose, onApplied }: { finding: Finding; o
 
 function CompliancePage() {
   const frameworks = [{ name: 'CIS AWS Foundations', score: 91, checks: '42 / 46 checks passing', color: 'green' }, { name: 'NIST SP 800-190', score: 86, checks: '30 / 35 checks passing', color: 'blue' }, { name: 'SOC 2', score: 78, checks: '18 / 23 checks passing', color: 'orange' }, { name: 'PCI DSS v4.0', score: 94, checks: '47 / 50 checks passing', color: 'green' }];
-  return <div className="content-stack"><PageHeader eyebrow="Posture management" title="Compliance" description="Track control coverage across the frameworks your team cares about." action={<button className="button button-secondary"><Download size={15} />Export evidence</button>} /><div className="compliance-summary"><div className="compliance-score"><div className="score-ring small"><div><strong>87%</strong><small>Overall</small></div></div><div><h2>Good standing</h2><p>89 of 104 controls passing across all mapped frameworks.</p><span className="trend-up"><ArrowUpRight size={14} /> 4.8% this month</span></div></div><div className="compliance-stat"><span>Passing controls</span><strong>89</strong><small>+7 this month</small></div><div className="compliance-stat"><span>Needs review</span><strong>15</strong><small>Across 4 frameworks</small></div></div><div className="framework-grid">{frameworks.map((framework) => <div className="panel framework-card" key={framework.name}><div className="framework-card-top"><div className={`framework-icon ${framework.color}`}><ShieldCheck size={18} /></div><button className="icon-button"><MoreHorizontal size={17} /></button></div><h3>{framework.name}</h3><div className="framework-score"><strong>{framework.score}%</strong><span>{framework.checks}</span></div><div className="progress-track"><div className={`progress-fill ${framework.color}`} style={{ width: `${framework.score}%` }} /></div><button className="text-button">View controls <ChevronRight size={14} /></button></div>)}</div></div>;
+  const [exporting, setExporting] = useState(false);
+  const [message, setMessage] = useState('');
+  const exportEvidence = async () => {
+    setExporting(true); setMessage('');
+    try {
+      const result = await generateReport('markdown');
+      setMessage(result.message);
+    } catch {
+      setMessage('Evidence export failed. Check the local API and try again.');
+    } finally { setExporting(false); }
+  };
+  return <div className="content-stack"><PageHeader eyebrow="Posture management" title="Compliance" description="Track control coverage across the frameworks your team cares about." action={<button className="button button-secondary" onClick={() => void exportEvidence()} disabled={exporting}>{exporting ? <><RefreshCw size={15} className="spin" />Exporting…</> : <><Download size={15} />Export evidence</>}</button>} /><div className="compliance-summary"><div className="compliance-score"><div className="score-ring small"><div><strong>87%</strong><small>Overall</small></div></div><div><h2>Good standing</h2><p>89 of 104 controls passing across all mapped frameworks.</p><span className="trend-up"><ArrowUpRight size={14} /> 4.8% this month</span></div></div><div className="compliance-stat"><span>Passing controls</span><strong>89</strong><small>+7 this month</small></div><div className="compliance-stat"><span>Needs review</span><strong>15</strong><small>Across 4 frameworks</small></div></div>{message && <div className="toast" role="status"><CheckCircle2 size={17} />{message}</div>}<div className="framework-grid">{frameworks.map((framework) => <div className="panel framework-card" key={framework.name}><div className="framework-card-top"><div className={`framework-icon ${framework.color}`}><ShieldCheck size={18} /></div></div><h3>{framework.name}</h3><div className="framework-score"><strong>{framework.score}%</strong><span>{framework.checks}</span></div><div className="progress-track"><div className={`progress-fill ${framework.color}`} style={{ width: `${framework.score}%` }} /></div></div>)}</div></div>;
 }
 
 function SecretsPage() {
   const secrets = [{ name: 'AWS access key', location: 'services/api/.env', type: 'AWS Access Key', detected: '8 min ago', status: 'Open' }, { name: 'GitHub token', location: 'scripts/deploy.sh', type: 'GitHub Token', detected: 'Yesterday', status: 'Open' }];
-  return <div className="content-stack"><PageHeader eyebrow="Posture management" title="Secrets" description="High-confidence credentials detected in your connected repositories." action={<button className="button button-primary"><KeyRound size={15} />Configure detection</button>} /><div className="secret-banner"><div className="secret-banner-icon"><ShieldAlert size={19} /></div><div><strong>2 secrets need attention</strong><span>Rotate exposed credentials, then mark the finding as resolved.</span></div><button className="button button-secondary">View playbook <ChevronRight size={14} /></button></div><div className="panel table-panel"><div className="table-meta"><span><strong>Open secrets</strong></span><span>Scanned 12 min ago</span></div><div className="table-scroll"><table className="findings-table secrets-table"><thead><tr><th>Secret</th><th>Location</th><th>Type</th><th>Detected</th><th>Status</th><th /></tr></thead><tbody>{secrets.map((secret) => <tr key={secret.location}><td><div className="finding-cell"><div className="finding-icon critical"><KeyRound size={15} /></div><div><strong>{secret.name}</strong><span>High confidence match</span></div></div></td><td><code>{secret.location}</code></td><td><span className="framework-pill">{secret.type}</span></td><td>{secret.detected}</td><td><span className="status-badge open"><span />{secret.status}</span></td><td><ChevronRight size={16} className="muted" /></td></tr>)}</tbody></table></div></div><div className="secret-trust"><ShieldCheck size={17} /><div><strong>Privacy by design</strong><span>AntiFine never stores secret values. Only fingerprints and locations are retained for triage.</span></div></div></div>;
+  return <div className="content-stack"><PageHeader eyebrow="Posture management" title="Secrets" description="High-confidence credentials detected in your connected repositories." /><div className="secret-banner"><div className="secret-banner-icon"><ShieldAlert size={19} /></div><div><strong>2 secrets need attention</strong><span>Rotate exposed credentials, then mark the finding as resolved.</span></div></div><div className="panel table-panel"><div className="table-meta"><span><strong>Open secrets</strong></span><span>Scanned 12 min ago</span></div><div className="table-scroll"><table className="findings-table secrets-table"><thead><tr><th>Secret</th><th>Location</th><th>Type</th><th>Detected</th><th>Status</th></tr></thead><tbody>{secrets.map((secret) => <tr key={secret.location}><td><div className="finding-cell"><div className="finding-icon critical"><KeyRound size={15} /></div><div><strong>{secret.name}</strong><span>High confidence match</span></div></div></td><td><code>{secret.location}</code></td><td><span className="framework-pill">{secret.type}</span></td><td>{secret.detected}</td><td><span className="status-badge open"><span />{secret.status}</span></td></tr>)}</tbody></table></div></div><div className="secret-trust"><ShieldCheck size={17} /><div><strong>Privacy by design</strong><span>AntiFine never stores secret values. Only fingerprints and locations are retained for triage.</span></div></div></div>;
 }
 
 function HistoryPage() {
   const scans = [{ id: 'scan_8f31c2', target: 'acme-infrastructure', type: 'IaC Config Audit', findings: 6, status: 'Completed', time: '12 min ago', duration: '18.4s' }, { id: 'scan_3a10b9', target: 'acme/web · PR #418', type: 'IaC Config Audit', findings: 2, status: 'Completed', time: '2 hr ago', duration: '11.2s' }, { id: 'scan_887bc1', target: 'staging ingress', type: 'SSRF Web Audit', findings: 0, status: 'Completed', time: 'Yesterday', duration: '7.8s' }, { id: 'scan_11ac72', target: 'acme-infrastructure', type: 'IaC Config Audit', findings: 8, status: 'Completed', time: 'Sep 08, 2026', duration: '20.1s' }];
-  return <div className="content-stack"><PageHeader eyebrow="Activity" title="Scan history" description="A complete audit trail of local scans." action={<button className="button button-secondary"><Download size={15} />Export history</button>} /><div className="panel table-panel"><div className="table-meta"><span><strong>Recent scans</strong></span><div className="filter-group"><select aria-label="Filter scan type"><option>All scan types</option><option>IaC Config Audit</option><option>SSRF Web Audit</option></select><button className="icon-button" aria-label="Refresh history"><RefreshCw size={15} /></button></div></div><div className="table-scroll"><table className="findings-table history-table"><thead><tr><th>Target</th><th>Scan type</th><th>Findings</th><th>Status</th><th>Run time</th><th /></tr></thead><tbody>{scans.map((scan) => <tr key={scan.id}><td><div className="finding-cell"><div className="finding-icon blue"><GitBranch size={15} /></div><div><strong>{scan.target}</strong><span>{scan.id} · {scan.duration}</span></div></div></td><td><span className="muted">{scan.type}</span></td><td><span className={scan.findings ? 'finding-count' : 'finding-count clean'}>{scan.findings || 'Clean'}</span></td><td><span className="status-badge fixed"><span />{scan.status}</span></td><td>{scan.time}</td><td><ChevronRight size={16} className="muted" /></td></tr>)}</tbody></table></div></div></div>;
+  const [exporting, setExporting] = useState(false);
+  const [message, setMessage] = useState('');
+  const exportHistory = async () => {
+    setExporting(true); setMessage('');
+    try { setMessage((await generateReport('markdown')).message); } catch { setMessage('History export failed. Check the local API and try again.'); } finally { setExporting(false); }
+  };
+  return <div className="content-stack"><PageHeader eyebrow="Activity" title="Scan history" description="A complete audit trail of local scans." action={<button className="button button-secondary" onClick={() => void exportHistory()} disabled={exporting}>{exporting ? <><RefreshCw size={15} className="spin" />Exporting…</> : <><Download size={15} />Export history</>}</button>} />{message && <div className="toast" role="status"><CheckCircle2 size={17} />{message}</div>}<div className="panel table-panel"><div className="table-meta"><span><strong>Recent scans</strong></span><div className="filter-group"><select aria-label="Filter scan type"><option>All scan types</option><option>IaC Config Audit</option><option>SSRF Web Audit</option></select></div></div><div className="table-scroll"><table className="findings-table history-table"><thead><tr><th>Target</th><th>Scan type</th><th>Findings</th><th>Status</th><th>Run time</th></tr></thead><tbody>{scans.map((scan) => <tr key={scan.id}><td><div className="finding-cell"><div className="finding-icon blue"><GitBranch size={15} /></div><div><strong>{scan.target}</strong><span>{scan.id} · {scan.duration}</span></div></div></td><td><span className="muted">{scan.type}</span></td><td><span className={scan.findings ? 'finding-count' : 'finding-count clean'}>{scan.findings || 'Clean'}</span></td><td><span className="status-badge fixed"><span />{scan.status}</span></td><td>{scan.time}</td></tr>)}</tbody></table></div></div></div>;
 }
 
 function ReportsPage() {
   const [loading, setLoading] = useState('');
   const [message, setMessage] = useState('');
   const createReport = async (format: string) => { setLoading(format); setMessage(''); try { const result = await generateReport(format); setMessage(result.message ?? 'Report generated successfully.'); if (result.downloadUrl) { const link = document.createElement('a'); link.href = result.downloadUrl; link.download = 'antifine-results.sarif'; link.click(); } } catch { setMessage('Report queued. Connect the API to download the generated artifact.'); } finally { setLoading(''); } };
-  return <div className="content-stack"><PageHeader eyebrow="Activity" title="Reports" description="Generate audit-ready evidence for engineering, security, and compliance teams." /><div className="report-grid"><div className="panel report-card"><div className="report-icon blue"><FileText size={20} /></div><h2>Executive summary</h2><p>A concise Markdown report with posture score, finding trends, and recommended priorities.</p><div className="report-meta"><span><Clock3 size={14} />Generated from latest scan</span><span><FileText size={14} />Markdown</span></div><button className="button button-secondary" onClick={() => void createReport('markdown')} disabled={Boolean(loading)}>{loading === 'markdown' ? <><RefreshCw size={15} className="spin" />Generating…</> : <><Download size={15} />Generate report</>}</button></div><div className="panel report-card"><div className="report-icon purple"><Code2 size={20} /></div><h2>SARIF export</h2><p>Machine-readable results for GitHub code scanning, CI gates, and downstream automation.</p><div className="report-meta"><span><ShieldCheck size={14} />OASIS SARIF 2.1.0</span><span><Download size={14} />JSON</span></div><button className="button button-primary" onClick={() => void createReport('sarif')} disabled={Boolean(loading)}>{loading === 'sarif' ? <><RefreshCw size={15} className="spin" />Preparing…</> : <><Download size={15} />Export SARIF</>}</button></div></div>{message && <div className="toast"><CheckCircle2 size={17} />{message}</div>}<div className="panel report-history"><div className="panel-heading"><div><h2>Recent reports</h2><p>Previously generated artifacts</p></div></div><div className="report-history-row"><div className="report-icon small blue"><FileText size={15} /></div><div><strong>antifine-executive-summary.md</strong><span>Generated Sep 09, 2026 · 14 findings</span></div><button className="icon-button"><Download size={16} /></button></div><div className="report-history-row"><div className="report-icon small purple"><Code2 size={15} /></div><div><strong>scan_results.sarif</strong><span>Generated Sep 08, 2026 · 8 findings</span></div><button className="icon-button"><Download size={16} /></button></div></div></div>;
+  return <div className="content-stack"><PageHeader eyebrow="Activity" title="Reports" description="Generate audit-ready evidence for engineering, security, and compliance teams." /><div className="report-grid"><div className="panel report-card"><div className="report-icon blue"><FileText size={20} /></div><h2>Executive summary</h2><p>A concise Markdown report with posture score, finding trends, and recommended priorities.</p><div className="report-meta"><span><Clock3 size={14} />Generated from latest scan</span><span><FileText size={14} />Markdown</span></div><button className="button button-secondary" onClick={() => void createReport('markdown')} disabled={Boolean(loading)}>{loading === 'markdown' ? <><RefreshCw size={15} className="spin" />Generating…</> : <><Download size={15} />Generate report</>}</button></div><div className="panel report-card"><div className="report-icon purple"><Code2 size={20} /></div><h2>SARIF export</h2><p>Machine-readable results for GitHub code scanning, CI gates, and downstream automation.</p><div className="report-meta"><span><ShieldCheck size={14} />OASIS SARIF 2.1.0</span><span><Download size={14} />JSON</span></div><button className="button button-primary" onClick={() => void createReport('sarif')} disabled={Boolean(loading)}>{loading === 'sarif' ? <><RefreshCw size={15} className="spin" />Preparing…</> : <><Download size={15} />Export SARIF</>}</button></div></div>{message && <div className="toast"><CheckCircle2 size={17} />{message}</div>}<div className="panel report-history"><div className="panel-heading"><div><h2>Recent reports</h2><p>Generate a fresh artifact above to download current data.</p></div></div></div></div>;
+}
+
+function SettingsPage({ onNavigate }: { onNavigate: (page: Page) => void }) {
+  const [density, setDensity] = useState(() => localStorage.getItem('antifine-density') ?? 'dense');
+  const saveDensity = (value: string) => {
+    setDensity(value);
+    localStorage.setItem('antifine-density', value);
+  };
+  return <div className="content-stack"><PageHeader eyebrow="Workspace configuration" title="Settings" description="Local runtime settings and operator preferences." /><section className="panel settings-panel"><div className="panel-heading"><div><h2>Local services</h2><p>AntiFine does not change backend or Ollama configuration from the browser.</p></div></div><div className="settings-row"><div><strong>FastAPI engine</strong><span>127.0.0.1:8000 · deterministic scanner and remediation</span></div><span className="status-badge fixed"><span />Local</span></div><div className="settings-row"><div><strong>Ollama provider</strong><span>Configured through OLLAMA_* environment variables</span></div><button className="button button-secondary" onClick={() => onNavigate('ai')}>Open Ask AntiFine</button></div></section><section className="panel settings-panel"><div className="panel-heading"><div><h2>Interface</h2><p>Preferences are stored only in this browser.</p></div></div><label className="field-label" htmlFor="density">Table density</label><select id="density" value={density} onChange={(event) => saveDensity(event.target.value)}><option value="dense">Dense</option><option value="comfortable">Comfortable</option></select></section></div>;
 }
 
 export default function App() {
@@ -657,5 +707,5 @@ export default function App() {
   };
   const completeScan = (nextFindings: Finding[]) => { setFindings(nextFindings); setPage('findings'); };
   const markApplied = () => { if (remediationFinding) setFindings((current) => current.map((item) => item.id === remediationFinding.id ? { ...item, status: 'Fixed' } : item)); };
-  return <AppShell page={page} setPage={(nextPage) => { if (nextPage !== 'ai') { setAssistantContext(undefined); setAssistantQuestion(''); } setPage(nextPage); }}><AnimatePresence mode="wait"><motion.div key={page} className="page-transition" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.16 }}>{page === 'overview' && <Overview findings={findings} onNavigate={setPage} onSelect={selectFinding} />}{page === 'scan' && <ScanWorkspace onComplete={completeScan} target={target} setTarget={setTarget} />}{page === 'findings' && <FindingsPage findings={findings} onSelect={selectFinding} />}{page === 'compliance' && <CompliancePage />}{page === 'secrets' && <SecretsPage />}{page === 'history' && <HistoryPage />}{page === 'reports' && <ReportsPage />}{page === 'ai' && <AskAntiFinePage context={assistantContext} initialQuestion={assistantQuestion} onClearContext={() => { setAssistantContext(undefined); setAssistantQuestion(''); }} onNewChat={() => { setAssistantContext(undefined); setAssistantQuestion(''); }} />}</motion.div></AnimatePresence><AnimatePresence>{selectedFinding && !remediationFinding && <FindingDrawer finding={selectedFinding} onClose={() => setSelectedFinding(null)} onRemediate={() => setRemediationFinding(selectedFinding)} onAsk={() => askAboutFinding(selectedFinding)} explanationCache={explanationCache} onExplanation={(id, result) => setExplanationCache((current) => ({ ...current, [id]: result }))} />}{remediationFinding && <RemediationModal finding={remediationFinding} onClose={() => setRemediationFinding(null)} onApplied={markApplied} />}</AnimatePresence></AppShell>;
+  return <AppShell page={page} setPage={(nextPage) => { if (nextPage !== 'ai') { setAssistantContext(undefined); setAssistantQuestion(''); } setPage(nextPage); }}><AnimatePresence mode="wait"><motion.div key={page} className="page-transition" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.16 }}>{page === 'overview' && <Overview findings={findings} onNavigate={setPage} onSelect={selectFinding} />}{page === 'scan' && <ScanWorkspace onComplete={completeScan} target={target} setTarget={setTarget} />}{page === 'findings' && <FindingsPage findings={findings} onSelect={selectFinding} />}{page === 'compliance' && <CompliancePage />}{page === 'secrets' && <SecretsPage />}{page === 'history' && <HistoryPage />}{page === 'reports' && <ReportsPage />}{page === 'ai' && <AskAntiFinePage context={assistantContext} initialQuestion={assistantQuestion} onClearContext={() => { setAssistantContext(undefined); setAssistantQuestion(''); }} onNewChat={() => { setAssistantContext(undefined); setAssistantQuestion(''); }} />}{page === 'settings' && <SettingsPage onNavigate={setPage} />}</motion.div></AnimatePresence><AnimatePresence>{selectedFinding && !remediationFinding && <FindingDrawer finding={selectedFinding} onClose={() => setSelectedFinding(null)} onRemediate={() => setRemediationFinding(selectedFinding)} onAsk={() => askAboutFinding(selectedFinding)} explanationCache={explanationCache} onExplanation={(id, result) => setExplanationCache((current) => ({ ...current, [id]: result }))} />}{remediationFinding && <RemediationModal finding={remediationFinding} onClose={() => setRemediationFinding(null)} onApplied={markApplied} />}</AnimatePresence></AppShell>;
 }
