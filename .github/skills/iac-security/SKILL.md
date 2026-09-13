@@ -1,76 +1,80 @@
 ---
 name: iac-security
-description: Analyze Terraform, Dockerfiles, and Kubernetes YAML with AntiFine's deterministic scanner and compliance rules. Load for IaC security review or rule changes.
+description: Analyze and safely evolve AntiFine's deterministic Terraform, Dockerfile, Kubernetes, secret, compliance, and remediation security logic.
 ---
 
 # AntiFine IaC security
 
-Use this skill only for Infrastructure-as-Code security work in AntiFine. AntiFine is deterministic first: scanner output, severity, evidence, compliance mappings, and remediation authority come from the repository code, not from an LLM guess.
+Load this skill for Infrastructure-as-Code security analysis, rule reviews, or scanner changes. AntiFine is a local-first deterministic scanner: its findings, evidence, severity, compliance mappings, and remediation verification are authoritative. AI/Copilot may explain and propose, but must never replace that logic.
 
-## Required workflow
+## Source of truth
 
-1. Read the real implementation under `src/scanners/`, the unified model in `src/models/finding.py`, and relevant tests before drawing conclusions.
-2. Trace the exact rule and its evidence in the source file. If no matching rule or source evidence exists, say so; never manufacture a finding.
-3. Preserve the scanner's exact severity and the mappings produced by `src/scanners/compliance_mapper.py`. Treat recommendations as recommendations, not observed facts.
-4. Keep AI explanations advisory. Never use an LLM-generated decision as the authoritative security result, severity, compliance mapping, or remediation approval.
-5. Do not modify files unless the user explicitly asks. Do not apply remediation, execute commands, or claim a fix without explicit authorization and deterministic verification.
-
-## Rule coverage to inspect
-
-### Terraform
-
-Inspect HCL structurally through `src/scanners/iac_audit.py`. Check the implemented rules for:
-
-- public SSH/RDP and dangerous `0.0.0.0/0` or `::/0` ingress
-- overly permissive ingress
-- `aws_db_instance.publicly_accessible = true`
-- missing S3 server-side encryption
-- missing or permissive S3 public-access blocks
-- other public resource exposure
-
-Report the exact rule name, resource/file evidence, affected ports or attributes, deterministic severity, and authoritative frameworks. Do not infer exposure from a variable name alone.
-
-### Dockerfiles
-
-Account for parser behavior and multi-stage builds. Check:
-
-- final runtime containers running as root or missing `USER`
-- `USER root` in intermediate builder stages, which may be informational rather than a final-image failure
-- `:latest`, untagged, or otherwise unpinned `FROM` images
-- missing `HEALTHCHECK` where the scanner requires it
-- stage boundaries and final-stage behavior
-
-Use the scanner's distinction between intermediate and final stages; do not turn normal builder setup into a critical finding.
-
-### Kubernetes YAML
-
-Use the scanner's safe multi-document YAML parsing and PodSpec traversal. Check:
-
-- `privileged: true`
-- `hostPID`, `hostNetwork` (and related host namespace access)
-- containers that do not run as non-root
-- writable root filesystems
-- missing CPU/memory resource limits
-- alignment with Pod Security Standards Restricted
-
-Inspect the actual workload kind and container security context. Do not report a field that is absent from the parsed PodSpec as present.
-
-## Rule changes
-
-When explicitly asked to change a security rule:
-
-- edit the smallest deterministic scanner/compliance/remediation surface;
-- preserve `Finding` compatibility and existing severity/mapping semantics;
-- add or update focused tests for positive, negative, malformed, and multi-stage/multi-document cases;
-- verify false-positive behavior and backwards compatibility;
-- keep remediation in `src/scanners/remediation.py` deterministic, allowlisted, backup-first, and followed by a rescan;
-- run the relevant test suite and report failures plainly.
-
-Reference files:
+Before changing security behavior, inspect the actual implementation and tests. Do not assume a rule exists because it is documented.
 
 - `src/scanners/iac_audit.py`
+- `src/scanners/secret_scanner.py`
 - `src/scanners/compliance_mapper.py`
 - `src/scanners/remediation.py`
 - `src/models/finding.py`
-- `tests/`
+- `src/api/server.py`
+- relevant files under `tests/`
 
+Trace the real parser, rule name, evidence, severity, framework metadata, API response, and remediation path. Never claim a finding without source evidence.
+
+## Terraform
+
+Use AntiFine's existing structural HCL parser. Inspect security groups, ingress/egress, public exposure, S3 encryption and public-access blocks, databases, network configuration, supported IAM infrastructure, resource attributes, and secrets. Existing patterns include SSH/RDP exposed to `0.0.0.0/0`, public databases, unencrypted S3, and missing S3 public-access blocks.
+
+For a new rule, define precise evidence, severity rationale, false-positive boundaries, authoritative mappings, and deterministic remediation where supported. Test malformed HCL, multiple resources, unknown/missing attributes, safe configurations, and edge cases. Never classify a resource from its name alone.
+
+## Dockerfiles
+
+Respect valid Dockerfile syntax and multi-stage semantics. Review root execution, missing final-stage `USER`, unpinned or `:latest` images, missing `HEALTHCHECK`, secrets in `ARG`/`ENV`, comments, and stage boundaries. Intermediate builder-stage root use may be informational or acceptable; do not report it as a final runtime failure when the final stage is secure.
+
+## Kubernetes
+
+Use the existing safe YAML parser and PodSpec traversal for `Pod`, `Deployment`, `StatefulSet`, `DaemonSet`, `Job`, and `CronJob`. Inspect all containers and `initContainers` across multi-document manifests. Verify evidence for privileged containers, `hostPID`, `hostNetwork`, other host namespaces, root execution, writable root filesystems, missing resource limits, capabilities, and Pod Security Standards Restricted violations. Test malformed YAML, multiple documents, multiple containers, and negative cases. Never assume a single container.
+
+## Secrets
+
+Preserve both high-confidence vendor/token patterns and Shannon-entropy detection. Minimize false positives with realistic safe fixtures covering UUIDs, hashes, normal IDs, environment/config values, borderline entropy, and malformed input. Never log, return, persist, render, or send raw secrets to Ollama. Redaction must apply to logs, tests, API responses, frontend state, and AI prompts.
+
+## Severity and compliance
+
+Severity is deterministic and evidence-based: `CRITICAL`, `HIGH`, `MEDIUM`, or `LOW`. Do not invent or let AI change it; document the rationale for rule changes.
+
+Compliance metadata from `src/scanners/compliance_mapper.py` is authoritative. Supported mappings may include CIS AWS Foundations, CIS Docker, CIS Kubernetes, NIST SP 800-190, PCI-DSS 4.0, and PSS Restricted. Preserve exact framework/control identifiers. Never invent mappings, infer cross-framework equivalence, or turn general security advice into a compliance claim. If no mapping exists, represent that explicitly.
+
+## Deterministic remediation
+
+Read `src/scanners/remediation.py` before changing fixes. Remediation must remain allowlisted, exact-targeted, predictable, backup-first, and verified by an automatic rescan. It must not execute arbitrary shell commands or accept AI-generated patches. AI must never modify files, approve a fix, or establish remediation success.
+
+## New-rule workflow
+
+1. Inspect the scanner architecture, parser, model, mapper, remediation path, and tests.
+2. Select the correct scanner and define observable positive, negative, boundary, and malformed-input behavior.
+3. Add safe parser-based fixtures.
+4. Implement the smallest deterministic detection change.
+5. Preserve severity, finding shape, compliance mappings, and backwards compatibility.
+6. Add deterministic remediation only when the existing allowlist can support it safely.
+7. Add regression tests for false positives, multiple resources/documents, and parser edge cases.
+8. Run focused tests, then the full relevant suite, and verify existing rules did not regress.
+
+## Security review checklist
+
+For every rule or scanner change, check:
+
+- Can an attacker bypass the detection?
+- Could legitimate configuration trigger a false positive?
+- Is parser behavior understood and malformed input safe?
+- Is severity justified by observed evidence?
+- Is remediation deterministic and narrowly scoped?
+- Is compliance mapping source-backed?
+- Could secrets leak through output, logs, or AI?
+- Could the rule introduce denial-of-service or scan-performance risk?
+
+## AI boundary and output
+
+AI may explain code, summarize behavior, analyze test failures, and suggest tests. It may not become the vulnerability source of truth, override severity or compliance, generate arbitrary remediation, or access secrets unnecessarily. Do not modify files while merely creating or reviewing this skill.
+
+For a completed AntiFine security task, report what was inspected, what changed, why it is safe, false-positive considerations, tests added and run, and limitations. Keep changes minimal and repository-consistent.
