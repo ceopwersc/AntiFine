@@ -1,74 +1,127 @@
 ---
 name: security-e2e-testing
-description: Verify AntiFine end-to-end with Playwright, including security workflows, browser states, API failures, accessibility, and responsive behavior.
+description: Test AntiFine's real browser workflows with Playwright as a senior QA and security engineer.
 ---
 
 # AntiFine security E2E testing
 
-Load this skill when testing AntiFine through its real browser UI. A rendered button is not proof that a feature works: perform the interaction and verify the resulting UI state, network behavior, and persisted or navigated outcome.
+Load this skill for browser-based verification of AntiFine. A feature is not functional merely because a button renders, an `onClick` exists, a toast appears, or a modal opens. Demonstrate the operation with real interaction, network evidence, visible state, and backend state where appropriate.
 
-## Required verification
+## Verification method
 
-- Use Playwright against the running React/Vite frontend and real FastAPI/Ollama integrations where available.
-- Exercise real clicks, typing, keyboard activation, file selection, drawer/modal transitions, retries, and navigation; do not validate only component markup.
-- Collect browser console messages and inspect unexpected errors.
-- Collect failed network requests and response status/details; distinguish expected validation failures from regressions.
-- Cover every reachable route/view and verify each advertised button or action has a meaningful result.
-- Test keyboard focus, Enter/Space activation, Escape/close behavior, labels, and usable focus states.
-- Test the supported viewport sizes, including desktop and a narrower responsive viewport.
-- Check loading, success, empty, disabled, timeout, backend-unavailable, malformed-input, and error states where the feature exposes them.
-- Never use real secrets or disclose sensitive infrastructure contents in fixtures, logs, screenshots, or test output.
+For every important action:
 
-## Critical AntiFine workflows
+1. Navigate to the actual page.
+2. Identify the accessible interactive element.
+3. Click, type, select, upload, or use the keyboard.
+4. Observe the expected network request and response.
+5. Observe application state and the visible result.
+6. Verify the resulting backend state when the action crosses an API boundary.
+7. Collect console errors, page errors, unhandled rejections, and unexpected failed requests.
 
-### Deterministic remediation
+Do not mark an action successful from UI text alone. Treat 404, 401, 403, 422, 500, timeout, CORS, and malformed-response behavior as test evidence, distinguishing expected validation failures from regressions.
 
-Verify the complete workflow, not just the presence of controls:
+## Application coverage
 
-`Scan → Finding → Finding Drawer → Review Fix → Diff → Apply → Rescan → Verified`
+Cover every actual view/route in the implementation, adapting if the app uses client-side page state:
 
-Use a safe temporary vulnerable IaC fixture. Assert that:
+`/` · `/scan` · `/findings` · `/remediation` · `/compliance` · `/secrets` · `/history` · `/reports` · `/ai` · `/settings`
 
-- the scan request succeeds and the finding is visible;
-- the correct finding row opens the existing drawer;
-- Review Fix shows the real deterministic before/after content;
-- Apply sends the expected remediation request;
-- a backup is created and reported;
-- the target is rescanned;
-- the finding becomes Fixed/Verified only when deterministic verification reports zero remaining findings;
-- remaining findings keep the item open and display an explicit verification failure.
+For every sidebar item, top navigation, breadcrumb, tab, link, or command-palette action, verify navigation, page content, no unexpected console errors, and no unexpected network failures.
 
-Do not treat a successful HTTP response alone as proof that remediation worked. Do not accept a UI-only status change without the backend verification result.
+## P0 workflows
 
-### Finding explanation
+### Deterministic security workflow
 
-Verify:
+Test with a safe temporary vulnerable fixture:
+
+`Scan → Finding → Investigate → Review Fix → Diff → Apply → Backup → Verification scan → Resolved`
+
+Verify the actual scan and remediation endpoints, request payloads, successful responses, deterministic before/after diff, backup creation, rescan, and finding status change. The UI must not claim success before backend confirmation. `findings_count == 0` or the repository's equivalent deterministic verification is required for Fixed/Verified. Remaining findings must keep the finding open and show explicit failure.
+
+Also verify remediation safety: only the intended fixture changes, unrelated files remain unchanged, arbitrary targets are rejected, backups are created as expected, and failed remediation never produces false success.
+
+### AI workflow
+
+Test:
 
 `Finding → Ask AntiFine → Ollama → explanation`
 
-Assert finding context is handed off, the assistant request contains the expected bounded context/messages, loading and disabled-Ollama states are explicit, errors are actionable, and a successful explanation is clearly advisory. Do not require Ollama for unrelated deterministic scanner tests; mock or use the documented local service boundary without inventing a success response.
+Also cover finding explanation, remediation explanation, context transfer, bounded conversation history, sources, regenerate, copy, Clear context, and New chat. Verify Ollama available, unavailable, and disabled behavior. AI failure must not break deterministic scanning.
 
-### Compliance and remediation
+Use synthetic prompt-injection content in Terraform comments, YAML comments, and Dockerfile comments, such as instructions to lower severity or report compliance. Assert deterministic severity, finding state, compliance mappings, and remediation status remain unchanged; AI must not claim a file changed or a rescan occurred.
 
-Verify:
+### Compliance workflow
+
+Test:
 
 `Compliance → related finding → remediation`
 
-Confirm the UI uses authoritative AntiFine finding/compliance data, preserves unmapped-framework behavior, and never turns generic documentation into a finding mapping. Remediation remains deterministic and reviewable.
+Assert displayed mappings originate from AntiFine metadata, related findings are correct, supported control links/actions work, and unknown mappings are not fabricated. AI-generated compliance text must never be rendered as deterministic truth.
 
-## Test discipline
+## Scan and finding coverage
 
-When repairing a broken UI:
+Use safe fixtures with no real secrets. Test:
 
-1. Reproduce the failure in the browser and capture the actual state, console output, and network request.
-2. Identify the root cause from the implementation and API contract.
-3. Implement the smallest fix without replacing backend functionality with mocks.
-4. Repeat the same browser interaction and verify the resulting state, including negative/error paths.
-5. Add or update a regression test that would fail if the defect returns.
+- file picker and drag/drop where supported;
+- file removal and clear queue;
+- duplicate and unsupported files;
+- malformed Terraform/YAML;
+- valid Terraform, Kubernetes, and Dockerfiles;
+- scan progress, completion, empty results, partial/error results, and backend unavailable;
+- search and combined severity/framework/technology/status filters;
+- sorting, row selection, drawer open/close, rule-ID copy, remediation action, AI explanation, and Ask AntiFine context.
 
-Prefer stable accessible roles, labels, and visible text over brittle CSS selectors. Wait for observable state changes rather than arbitrary sleeps. Assert both the request and the user-visible result when an action crosses the API boundary.
+Search and filters must alter results. Rows must open the correct finding, not merely any drawer.
 
-## Reporting
+## Secret safety
 
-For each tested workflow record the route, viewport, fixture/setup, actions, expected result, observed result, console errors, failed requests, and any limitation caused by an unavailable backend service. Separate verified behavior from untested or unsupported behavior. Never mark a feature working merely because it rendered.
+Use synthetic credentials only. Verify masking and reveal behavior when implemented, ensure raw values do not appear in UI, logs, or test output, and confirm AI requests receive redacted values. Never commit credentials or use production infrastructure.
 
+## Accessibility and responsive behavior
+
+Use keyboard interaction where practical: Tab, Shift+Tab, Enter, Space, Escape, and relevant arrow keys. Verify visible focus, meaningful labels, reachable controls, dialog focus behavior, and Escape close behavior.
+
+Run critical workflows at:
+
+- 1280×800
+- 1440×900
+- 1920×1080
+- 1024×768
+- 768×1024
+
+Check overflow, drawer/modal behavior, table usability, code readability, sidebar collapse, and accessible buttons.
+
+## Repair workflow
+
+When a UI defect is found:
+
+1. Reproduce it in Playwright and capture the page, element, expected result, actual result, console output, and network behavior.
+2. Diagnose the root cause from the implementation and API contract.
+3. Make the smallest safe fix without replacing working backend behavior with mocks.
+4. Add or update the regression test.
+5. Re-run the same test and the critical-path workflow.
+6. Run relevant existing tests and check for unrelated regressions.
+
+Classify failures:
+
+- **P0** — core Scan → Finding → Remediation → Rescan security workflow broken;
+- **P1** — important navigation, findings, AI, compliance, or reporting functionality broken;
+- **P2** — history, settings, or secondary interaction broken;
+- **P3** — minor UI or accessibility issue.
+
+Every discovered failure should include page, element, expected, actual, probable cause, severity/priority, and test name.
+
+## Test organization and artifacts
+
+Prefer the existing test framework and avoid duplicate infrastructure. If the repository uses Playwright specs, organize coverage under `tests/e2e/` with focused navigation, overview, scan, findings, remediation, compliance, secrets, history, reports, and AI specs as appropriate.
+
+Capture screenshots, traces, console errors, and failed requests on failure when useful for diagnosis. Wait for observable state changes instead of arbitrary sleeps. Assert both the request and user-visible result for API-backed actions.
+
+## Security boundary
+
+The browser suite must never use real secrets, weaken security checks, bypass deterministic verification, treat AI output as authoritative, or automatically approve risky remediation.
+
+Operate as:
+
+`DISCOVER → REPRODUCE → DIAGNOSE → FIX → TEST → REGRESS`
