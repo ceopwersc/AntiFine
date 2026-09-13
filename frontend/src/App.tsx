@@ -61,99 +61,6 @@ interface Finding {
   detected: string;
 }
 
-const mockFindings: Finding[] = [
-  {
-    id: 'AF-1042',
-    rule_name: 'Publicly accessible database instance',
-    severity: 'Critical',
-    framework: 'CIS AWS 2.3.1',
-    frameworks: ['CIS AWS 2.3.1', 'SOC 2 CC6.1'],
-    file: 'infra/production.tf',
-    line: 42,
-    description: 'The database is configured with publicly_accessible = true. Public database endpoints increase the attack surface and should only be used when explicitly required.',
-    remediation: 'Set publicly_accessible to false and route private workloads through the VPC.',
-    before: 'publicly_accessible = true',
-    after: 'publicly_accessible = false',
-    status: 'Open',
-    detected: '12 min ago',
-  },
-  {
-    id: 'AF-1038',
-    rule_name: 'Container runs as root',
-    severity: 'High',
-    framework: 'CIS Docker 4.1',
-    frameworks: ['CIS Docker 4.1', 'NIST SP 800-190'],
-    file: 'services/api/Dockerfile',
-    line: 18,
-    description: 'The final image does not declare a non-root USER. A compromised process can gain full container privileges and potentially access mounted resources.',
-    remediation: 'Create a dedicated application user and run the final image with that user.',
-    before: 'EXPOSE 8080\nCMD ["node", "server.js"]',
-    after: 'USER node\nEXPOSE 8080\nCMD ["node", "server.js"]',
-    status: 'Open',
-    detected: '12 min ago',
-  },
-  {
-    id: 'AF-1033',
-    rule_name: 'S3 bucket encryption missing',
-    severity: 'High',
-    framework: 'CIS AWS 2.1.1',
-    frameworks: ['CIS AWS 2.1.1', 'PCI DSS 3.4'],
-    file: 'infra/storage.tf',
-    line: 7,
-    description: 'The bucket has no server-side encryption configuration. Data at rest should use an approved KMS key or AES256.',
-    remediation: 'Add a server-side encryption configuration using the platform managed key.',
-    before: 'resource "aws_s3_bucket" "artifacts" {\n  bucket = "acme-artifacts"\n}',
-    after: 'resource "aws_s3_bucket" "artifacts" {\n  bucket = "acme-artifacts"\n\n  server_side_encryption_configuration {\n    rule { apply_server_side_encryption_by_default { sse_algorithm = "AES256" } }\n  }\n}',
-    status: 'Open',
-    detected: '12 min ago',
-  },
-  {
-    id: 'AF-1029',
-    rule_name: 'Privileged Kubernetes container',
-    severity: 'High',
-    framework: 'CIS Kubernetes 5.2.1',
-    frameworks: ['CIS Kubernetes 5.2.1', 'PSS Restricted'],
-    file: 'deployments/worker.yaml',
-    line: 63,
-    description: 'A workload requests privileged mode, bypassing most container isolation controls. Privileged containers should not run in production namespaces.',
-    remediation: 'Remove privileged mode and use the minimum Linux capabilities required by the workload.',
-    before: 'securityContext:\n  privileged: true',
-    after: 'securityContext:\n  allowPrivilegeEscalation: false\n  privileged: false',
-    status: 'Open',
-    detected: '12 min ago',
-  },
-  {
-    id: 'AF-1024',
-    rule_name: 'Broad security group ingress',
-    severity: 'Medium',
-    framework: 'CIS AWS 5.2.1',
-    frameworks: ['CIS AWS 5.2.1', 'NIST CSF PR.AC-5'],
-    file: 'infra/network.tf',
-    line: 88,
-    description: 'Ingress from 0.0.0.0/0 is allowed on a sensitive management port. Restrict access to trusted networks or a private security group.',
-    remediation: 'Replace the public CIDR with the approved corporate VPN CIDR.',
-    before: 'cidr_blocks = ["0.0.0.0/0"]',
-    after: 'cidr_blocks = ["10.24.0.0/16"]',
-    status: 'Open',
-    detected: '12 min ago',
-  },
-  {
-    id: 'AF-1018',
-    rule_name: 'Missing resource limits',
-    severity: 'Low',
-    framework: 'CIS Kubernetes 5.2.3',
-    frameworks: ['CIS Kubernetes 5.2.3'],
-    file: 'deployments/web.yaml',
-    line: 51,
-    description: 'The container has no CPU and memory limits. Resource limits reduce noisy-neighbor risk and make workloads more predictable.',
-    remediation: 'Define requests and limits for CPU and memory.',
-    before: 'containers:\n  - name: web\n    image: acme/web:latest',
-    after: 'containers:\n  - name: web\n    image: acme/web:latest\n    resources:\n      limits: { cpu: "500m", memory: "256Mi" }',
-    status: 'Open',
-    detected: '12 min ago',
-  },
-];
-
 const navGroups = [
   {
     label: 'Workspace',
@@ -687,8 +594,8 @@ function RemediationModal({ finding, onClose, onApplied }: { finding: Finding; o
   return <motion.div className="modal-scrim" role="dialog" aria-modal="true" aria-label="Review remediation" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}><motion.div className="remediation-modal" initial={{ opacity: 0, y: 16, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }}><div className="modal-header"><div><span className="drawer-eyebrow">Deterministic remediation</span><h2>Review proposed fix</h2><p>Inspect the exact change before applying it to <code>{finding.file}</code>.</p></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={19} /></button></div><div className="diff-meta"><span><FileCode2 size={15} />{finding.file}</span><span>Line {finding.line}</span><span className="diff-safe"><ShieldCheck size={14} />Deterministic proposal</span></div><div className="diff-view"><div className="diff-column"><div className="diff-column-header removed">Before <span>−</span></div><pre>{finding.before.split('\n').map((line, index) => <div key={`${line}-${index}`} className="diff-line removed-line"><span>{String(index + 1).padStart(2, '0')}</span>{line || ' '}</div>)}</pre></div><div className="diff-column"><div className="diff-column-header added">After <span>＋</span></div><pre>{finding.after.split('\n').map((line, index) => <div key={`${line}-${index}`} className="diff-line added-line"><span>{String(index + 1).padStart(2, '0')}</span>{line || ' '}</div>)}</pre></div></div><section className="remediation-ai-review" aria-live="polite"><div className="section-heading-row"><div><h3>AI explanation</h3><span className="ai-label">Local AI · Ollama</span></div>{reviewExplanation && <button className="text-button" onClick={() => void explainFix()} disabled={reviewLoading}>{reviewLoading ? 'Analyzing remediation locally…' : 'Regenerate'}</button>}</div><p className="ai-disclaimer">Optional review of the deterministic AntiFine proposal. AI does not approve or apply this fix.</p>{reviewError ? <div className="ai-error"><strong>Local AI unavailable</strong><span>AntiFine can still preview, apply, and verify this deterministic fix.</span><button className="text-button" onClick={() => void explainFix()} disabled={reviewLoading}>Retry</button></div> : reviewExplanation ? <div className="ai-response"><span className="ai-model">{reviewExplanation.model} · generated locally</span>{renderExplanation(reviewExplanation.explanation)}</div> : <button className="button button-secondary ai-explain-button" onClick={() => void explainFix()} disabled={reviewLoading}>{reviewLoading ? <><RefreshCw size={15} className="spin" />Analyzing remediation locally…</> : <><Sparkles size={15} />Explain this Fix</>}</button>}</section>  {verification && <div className={`modal-callout${verification.findings_count === 0 ? '' : ' modal-callout-error'}`}><ShieldCheck size={17} /><div><strong>{verification.findings_count === 0 ? 'Verification completed' : 'Verification failed'}</strong><span>{verification.findings_count === 0 ? `Finding no longer detected. Backup: ${verification.backup ?? 'created'}.` : `${verification.findings_count} finding(s) remain open; the finding was not marked remediated.`}</span></div></div>}<div className={`modal-callout${remediationError ? ' modal-callout-error' : ''}`}><ShieldCheck size={17} /><div><strong>{remediationError ? 'Remediation failed' : 'Before you apply'}</strong><span>{remediationError || '1 file will change · 1 backup will be created · 1 deterministic rule will be remediated.'}</span></div></div><div className="modal-footer"><button className="button button-secondary" onClick={onClose}>Cancel</button>{applied ? <button className="button button-success" onClick={onClose}><Check size={15} />Fix applied</button> : <button className="button button-primary" disabled={applying} onClick={() => void apply()}>{applying ? <><RefreshCw size={15} className="spin" />Applying fix…</> : <><Sparkles size={15} />Apply deterministic fix</>}</button>}</div></motion.div></motion.div>;
 }
 
-function CompliancePage() {
-  const frameworks = [{ name: 'CIS AWS Foundations', score: 91, checks: '42 / 46 checks passing', color: 'green' }, { name: 'NIST SP 800-190', score: 86, checks: '30 / 35 checks passing', color: 'blue' }, { name: 'SOC 2', score: 78, checks: '18 / 23 checks passing', color: 'orange' }, { name: 'PCI DSS v4.0', score: 94, checks: '47 / 50 checks passing', color: 'green' }];
+function CompliancePage({ findings }: { findings: Finding[] }) {
+  const mappings = Array.from(new Set(findings.flatMap((finding) => finding.frameworks))).sort();
   const [exporting, setExporting] = useState(false);
   const [message, setMessage] = useState('');
   const exportEvidence = async () => {
@@ -700,7 +607,7 @@ function CompliancePage() {
       setMessage('Evidence export failed. Check the local API and try again.');
     } finally { setExporting(false); }
   };
-  return <div className="content-stack"><PageHeader eyebrow="Posture management" title="Compliance" description="Track control coverage across the frameworks your team cares about." action={<button className="button button-secondary" onClick={() => void exportEvidence()} disabled={exporting}>{exporting ? <><RefreshCw size={15} className="spin" />Exporting…</> : <><Download size={15} />Export evidence</>}</button>} /><div className="compliance-summary"><div className="compliance-score"><div className="score-ring small"><div><strong>87%</strong><small>Overall</small></div></div><div><h2>Good standing</h2><p>89 of 104 controls passing across all mapped frameworks.</p><span className="trend-up"><ArrowUpRight size={14} /> 4.8% this month</span></div></div><div className="compliance-stat"><span>Passing controls</span><strong>89</strong><small>+7 this month</small></div><div className="compliance-stat"><span>Needs review</span><strong>15</strong><small>Across 4 frameworks</small></div></div>{message && <div className="toast" role="status"><CheckCircle2 size={17} />{message}</div>}<div className="framework-grid">{frameworks.map((framework) => <div className="panel framework-card" key={framework.name}><div className="framework-card-top"><div className={`framework-icon ${framework.color}`}><ShieldCheck size={18} /></div></div><h3>{framework.name}</h3><div className="framework-score"><strong>{framework.score}%</strong><span>{framework.checks}</span></div><div className="progress-track"><div className={`progress-fill ${framework.color}`} style={{ width: `${framework.score}%` }} /></div></div>)}</div></div>;
+  return <div className="content-stack"><PageHeader eyebrow="Posture management" title="Compliance" description="Authoritative mappings supplied by the deterministic scanner." action={<button className="button button-secondary" onClick={() => void exportEvidence()} disabled={exporting}>{exporting ? <><RefreshCw size={15} className="spin" />Exporting…</> : <><Download size={15} />Export evidence</>}</button>} />{message && <div className="toast" role="status"><CheckCircle2 size={17} />{message}</div>}<div className="compliance-summary"><div className="compliance-stat"><span>Findings mapped</span><strong>{findings.filter((finding) => finding.frameworks.length > 0).length}</strong><small>Current scan findings</small></div><div className="compliance-stat"><span>Mapped controls</span><strong>{mappings.length}</strong><small>Unique authoritative mappings</small></div><div className="compliance-stat"><span>Open findings</span><strong>{findings.filter((finding) => finding.status === 'Open').length}</strong><small>Mapping does not imply compliance</small></div></div>{mappings.length === 0 ? <div className="panel empty-state"><ShieldCheck size={22} /><strong>No authoritative mappings available</strong><span>Run a deterministic scan to populate compliance evidence.</span></div> : <div className="framework-grid">{mappings.map((mapping) => <div className="panel framework-card" key={mapping}><div className="framework-card-top"><div className="framework-icon blue"><ShieldCheck size={18} /></div></div><h3>{mapping}</h3><div className="framework-score"><strong>{findings.filter((finding) => finding.frameworks.includes(mapping)).length}</strong><span>mapped finding(s)</span></div><p className="muted">Mapped control evidence only; no compliance pass is inferred.</p></div>)}</div>}</div>;
 }
 
 function SecretsPage() {
@@ -737,7 +644,7 @@ function SettingsPage({ onNavigate }: { onNavigate: (page: Page) => void }) {
 
 export default function App() {
   const [page, setPage] = useState<Page>('overview');
-  const [findings, setFindings] = useState<Finding[]>(mockFindings);
+  const [findings, setFindings] = useState<Finding[]>([]);
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
   const [remediationFinding, setRemediationFinding] = useState<Finding | null>(null);
   const [explanationCache, setExplanationCache] = useState<Record<string, FindingExplanation>>({});
@@ -767,5 +674,5 @@ export default function App() {
   };
   const completeScan = (nextFindings: Finding[]) => { setFindings(nextFindings); setPage('findings'); };
   const markApplied = () => { if (remediationFinding) setFindings((current) => current.map((item) => item.id === remediationFinding.id ? { ...item, status: 'Fixed' } : item)); };
-  return <AppShell page={page} setPage={(nextPage) => { if (nextPage !== 'ai') { setAssistantContext(undefined); setAssistantQuestion(''); } setPage(nextPage); }}><AnimatePresence mode="wait"><motion.div key={page} className="page-transition" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.16 }}>{page === 'overview' && <Overview findings={findings} onNavigate={setPage} onSelect={selectFinding} />}{page === 'scan' && <ScanWorkspace onComplete={completeScan} onViewFindings={() => setPage('findings')} onOpenFinding={selectFinding} target={target} setTarget={setTarget} />}{page === 'findings' && <FindingsPage findings={findings} onSelect={selectFinding} />}{page === 'compliance' && <CompliancePage />}{page === 'secrets' && <SecretsPage />}{page === 'history' && <HistoryPage />}{page === 'reports' && <ReportsPage />}{page === 'ai' && <AskAntiFinePage context={assistantContext} initialQuestion={assistantQuestion} onClearContext={() => { setAssistantContext(undefined); setAssistantQuestion(''); }} onNewChat={() => { setAssistantContext(undefined); setAssistantQuestion(''); }} />}{page === 'settings' && <SettingsPage onNavigate={setPage} />}</motion.div></AnimatePresence><AnimatePresence>{selectedFinding && !remediationFinding && <FindingDrawer finding={selectedFinding} onClose={() => setSelectedFinding(null)} onRemediate={() => setRemediationFinding(selectedFinding)} onAsk={() => askAboutFinding(selectedFinding)} explanationCache={explanationCache} onExplanation={(id, result) => setExplanationCache((current) => ({ ...current, [id]: result }))} />}{remediationFinding && <RemediationModal finding={remediationFinding} onClose={() => setRemediationFinding(null)} onApplied={markApplied} />}</AnimatePresence></AppShell>;
+  return <AppShell page={page} setPage={(nextPage) => { if (nextPage !== 'ai') { setAssistantContext(undefined); setAssistantQuestion(''); } setPage(nextPage); }}><AnimatePresence mode="wait"><motion.div key={page} className="page-transition" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.16 }}>{page === 'overview' && <Overview findings={findings} onNavigate={setPage} onSelect={selectFinding} />}{page === 'scan' && <ScanWorkspace onComplete={completeScan} onViewFindings={() => setPage('findings')} onOpenFinding={selectFinding} target={target} setTarget={setTarget} />}{page === 'findings' && <FindingsPage findings={findings} onSelect={selectFinding} />}{page === 'compliance' && <CompliancePage findings={findings} />}{page === 'secrets' && <SecretsPage />}{page === 'history' && <HistoryPage />}{page === 'reports' && <ReportsPage />}{page === 'ai' && <AskAntiFinePage context={assistantContext} initialQuestion={assistantQuestion} onClearContext={() => { setAssistantContext(undefined); setAssistantQuestion(''); }} onNewChat={() => { setAssistantContext(undefined); setAssistantQuestion(''); }} />}{page === 'settings' && <SettingsPage onNavigate={setPage} />}</motion.div></AnimatePresence><AnimatePresence>{selectedFinding && !remediationFinding && <FindingDrawer finding={selectedFinding} onClose={() => setSelectedFinding(null)} onRemediate={() => setRemediationFinding(selectedFinding)} onAsk={() => askAboutFinding(selectedFinding)} explanationCache={explanationCache} onExplanation={(id, result) => setExplanationCache((current) => ({ ...current, [id]: result }))} />}{remediationFinding && <RemediationModal finding={remediationFinding} onClose={() => setRemediationFinding(null)} onApplied={markApplied} />}</AnimatePresence></AppShell>;
 }

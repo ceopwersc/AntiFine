@@ -143,6 +143,20 @@ AntiFine separates three concepts:
 
 A framework mentioned by a user or found in general documentation does not create a finding mapping. If a requested framework is absent from the authoritative metadata, AntiFine reports that no supplied mapping is available rather than inventing a control or cross-framework equivalence.
 
+Each finding carries its complete authoritative mapping list through the API as
+`frameworks` and persists it in SQLite as the JSON array
+`scan_results.compliance_frameworks`. The legacy
+`scan_results.compliance_framework` column remains as a compatibility primary
+value derived from the first mapping. Existing databases are migrated
+non-destructively: a legacy primary value becomes one mapping, and no
+secondary mappings are inferred.
+
+SARIF and Markdown reports read the persisted mapping array directly. They do
+not reconstruct compliance from finding titles or descriptions. The frontend
+renders mapped controls and finding state separately; a mapping alone never
+means that a control passed. AntiFine currently has no PDF reporting
+implementation, so PDF evidence is not generated or implied.
+
 ## Optional local AI
 
 Ollama is optional and is not part of scanning, compliance mapping, remediation, or CI gating.

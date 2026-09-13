@@ -14,6 +14,8 @@ from __future__ import annotations
 import re
 import sqlite3
 import sys
+import json
+from contextlib import closing
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -24,7 +26,6 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from database.setup import DB_PATH  # noqa: E402
-from src.reporting.knowledge_base import get_remediation  # noqa: E402
 
 REPORT_PATH: Path = PROJECT_ROOT / "compliance_report.md"
 
@@ -108,6 +109,14 @@ class ScanRecord:
     severity: str
     status: str
     timestamp: str
+    frameworks: tuple[str, ...] = ()
+    description_text: str = ""
+    remediation_text: str = ""
+
+    @property
+    def compliance_frameworks(self) -> list[str]:
+        """Authoritative mappings, never inferred from vulnerability text."""
+        return list(self.frameworks)
 
     @property
     def normalized_severity(self) -> str:
@@ -124,6 +133,8 @@ class ScanRecord:
     @property
     def remediation(self) -> str:
         """Recommended remediation for this finding."""
+        if self.remediation_text:
+            return self.remediation_text
         port = self.port
         if port is not None and port in REMEDIATION_BY_PORT:
             return REMEDIATION_BY_PORT[port]
@@ -148,12 +159,39 @@ def fetch_scan_results(db_path: Path = DB_PATH) -> list[ScanRecord]:
         )
 
     try:
-        with sqlite3.connect(db_path) as connection:
+        with closing(sqlite3.connect(db_path)) as connection:
             connection.row_factory = sqlite3.Row
-            rows = connection.execute(
+            schema_cursor = connection.execute("PRAGMA table_info(scan_results)")
+            columns = {row["name"] for row in schema_cursor.fetchall()}
+            schema_cursor.close()
+            mappings = (
+                "compliance_frameworks"
+                if "compliance_frameworks" in columns
+                else "NULL AS compliance_frameworks"
+            )
+            primary = (
+                "compliance_framework"
+                if "compliance_framework" in columns
+                else "NULL AS compliance_framework"
+            )
+            description = (
+                "description"
+                if "description" in columns
+                else "NULL AS description"
+            )
+            remediation = (
+                "remediation"
+                if "remediation" in columns
+                else "NULL AS remediation"
+            )
+            result_cursor = connection.execute(
                 "SELECT id, target_id, vulnerability_type, severity, status, "
-                "timestamp FROM scan_results ORDER BY timestamp DESC, id DESC"
-            ).fetchall()
+                f"timestamp, {description}, {remediation}, {primary}, {mappings} "
+                "FROM scan_results "
+                "ORDER BY timestamp DESC, id DESC"
+            )
+            rows = result_cursor.fetchall()
+            result_cursor.close()
     except sqlite3.Error as exc:
         raise ReportError(f"Could not read findings from {db_path}: {exc}") from exc
 
@@ -165,9 +203,25 @@ def fetch_scan_results(db_path: Path = DB_PATH) -> list[ScanRecord]:
             severity=row["severity"] or "",
             status=row["status"] or "UNKNOWN",
             timestamp=row["timestamp"] or "",
+            description_text=row["description"] or "",
+            remediation_text=row["remediation"] or "",
+            frameworks=tuple(
+                _parse_frameworks(row["compliance_frameworks"])
+                or ([row["compliance_framework"]] if row["compliance_framework"] else [])
+            ),
         )
         for row in rows
     ]
+
+
+def _parse_frameworks(value: object) -> list[str]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value) if isinstance(value, str) else value
+    except (TypeError, ValueError):
+        return []
+    return parsed if isinstance(parsed, list) else []
 
 
 def group_by_severity(
@@ -245,13 +299,14 @@ def render_report(
         lines += [
             f"### {badge} {severity} ({len(bucket)})",
             "",
-            "| Target | Finding | Status | Detected |",
-            "| :--- | :--- | :--- | :--- |",
+            "| Target | Finding | Mappings | Status | Detected |",
+            "| :--- | :--- | :--- | :--- | :--- |",
         ]
         for record in bucket:
             lines.append(
                 f"| {record.target_id} "
                 f"| {_escape_cell(record.vulnerability_type)} "
+                f"| {_escape_cell(', '.join(record.frameworks) or 'None supplied')} "
                 f"| {_escape_cell(record.status)} "
                 f"| {_escape_cell(record.timestamp)} |"
             )
@@ -261,23 +316,17 @@ def render_report(
             lines += [
                 f"#### Target {record.target_id}: {record.vulnerability_type}",
                 "",
+                "**Compliance mappings**",
+                "",
+                *(
+                    [f"- {_escape_cell(mapping)}" for mapping in record.frameworks]
+                    or ["- None supplied by the deterministic scanner."]
+                ),
+                "",
                 "**Remediation & Hardening**",
                 ""
             ]
-            
-            kb = get_remediation(record.vulnerability_type)
-            lines += [
-                f"**Summary:** {kb['summary']}",
-                "",
-                "**Mitigation:**",
-                kb['mitigation'],
-                "",
-                "**Example:**",
-                kb['example'],
-                "",
-                "---",
-                ""
-            ]
+            lines += [record.remediation, "", "---", ""]
 
     lines += [
         "---",

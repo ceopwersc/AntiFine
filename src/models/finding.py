@@ -28,3 +28,11 @@ class Finding:
     frameworks: list[str] = field(default_factory=list)
     remediation: str = ""
     description: str = ""
+    @property
+    def compliance_frameworks(self) -> list[str]:
+        """Compatibility alias for the authoritative mapping list."""
+        return self.frameworks
+
+    @compliance_frameworks.setter
+    def compliance_frameworks(self, value: list[str]) -> None:
+        self.frameworks = list(value)

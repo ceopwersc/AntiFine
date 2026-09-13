@@ -10,7 +10,9 @@ from __future__ import annotations
 import re
 import sqlite3
 import sys
+import json
 import yaml
+from contextlib import closing
 from pathlib import Path
 
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
@@ -19,6 +21,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from database.setup import DB_PATH, initialize_database  # noqa: E402
 from src.models.finding import Finding  # noqa: E402
+from src.scanners.compliance_mapper import get_finding_metadata  # noqa: E402
 from src.scanners.secret_scanner import scan_value_for_secrets  # noqa: E402
 
 
@@ -637,21 +640,30 @@ def run_iac_audit(
     if persist and all_findings:
         rows = []
         for finding in all_findings:
+            frameworks = finding.frameworks
+            if not frameworks:
+                frameworks = get_finding_metadata(finding.rule_name)["frameworks"]
             rows.append((
                 target_id,
                 finding.rule_name,
                 finding.severity,
                 "OPEN",
+                frameworks[0] if frameworks else "Unmapped",
+                json.dumps(frameworks),
+                finding.description,
+                finding.remediation,
                 finding.filename,
             ))
 
         try:
             initialize_database(db_path)
-            with sqlite3.connect(db_path) as connection:
+            with closing(sqlite3.connect(db_path)) as connection:
+                connection.execute("BEGIN")
                 connection.executemany(
                     "INSERT INTO scan_results "
-                    "(target_id, vulnerability_type, severity, status, target_path) "
-                    "VALUES (?, ?, ?, ?, ?)",
+                    "(target_id, vulnerability_type, severity, status, "
+                    "compliance_framework, compliance_frameworks, description, "
+                    "remediation, target_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     rows,
                 )
                 connection.commit()

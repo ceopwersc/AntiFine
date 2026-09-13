@@ -12,6 +12,7 @@ depends on the storage layer but never on the reporting engine.
 from __future__ import annotations
 
 import os
+import json
 import shutil
 import sqlite3
 import subprocess
@@ -24,6 +25,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from database.setup import DB_PATH, initialize_database  # noqa: E402
+from src.scanners.compliance_mapper import get_finding_metadata  # noqa: E402
 
 SCRIPT_PATH: Path = PROJECT_ROOT / "scripts" / "port_mapper.sh"
 
@@ -317,18 +319,22 @@ def record_findings(
     if not findings:
         return 0
 
-    rows = [
-        (target_id, finding.vulnerability_type, finding.severity, status)
-        for finding in findings
-    ]
+    rows = []
+    for finding in findings:
+        metadata = get_finding_metadata(finding.vulnerability_type)
+        rows.append((
+            target_id, finding.vulnerability_type, finding.severity, status,
+            metadata["primary_framework"], json.dumps(metadata["frameworks"]),
+        ))
 
     try:
         initialize_database(db_path)
         with sqlite3.connect(db_path) as connection:
             connection.executemany(
                 "INSERT INTO scan_results "
-                "(target_id, vulnerability_type, severity, status) "
-                "VALUES (?, ?, ?, ?)",
+                "(target_id, vulnerability_type, severity, status, "
+                "compliance_framework, compliance_frameworks) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
                 rows,
             )
             connection.commit()

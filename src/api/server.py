@@ -5,6 +5,7 @@ for decoupling the frontend from the core execution logic.
 """
 
 import ipaddress
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -285,13 +286,17 @@ async def get_dashboard() -> Dict[str, Any]:
                     
             # Fetch compliance frameworks
             comp_rows = conn.execute(
-                "SELECT compliance_framework, COUNT(*) "
-                "FROM scan_results WHERE compliance_framework IS NOT NULL AND compliance_framework != 'Unmapped' "
-                "GROUP BY compliance_framework"
+                "SELECT compliance_framework, compliance_frameworks "
+                "FROM scan_results WHERE status = 'OPEN'"
             ).fetchall()
-            for fw, cnt in comp_rows:
-                if fw:
-                    compliance_status[fw] = "Failing" if cnt > 0 else "Passing"
+            for primary, encoded in comp_rows:
+                try:
+                    frameworks = json.loads(encoded) if encoded else []
+                except (TypeError, ValueError):
+                    frameworks = []
+                for framework in frameworks or ([primary] if primary else []):
+                    if framework and framework != "Unmapped":
+                        compliance_status[framework] = "Failing"
                     
     except sqlite3.Error as exc:
         raise HTTPException(status_code=500, detail=f"Database error: {exc}")
@@ -308,15 +313,17 @@ async def run_ssrf_scan(req: SSRFScanRequest, background_tasks: BackgroundTasks)
         rows = []
         for finding in findings:
             vuln_type = finding.vulnerability_type
-            framework = map_finding_to_framework(vuln_type)
-            rows.append((1, vuln_type, finding.severity, "OPEN", framework))
+            meta = get_finding_metadata(vuln_type)
+            framework = meta["primary_framework"]
+            rows.append((1, vuln_type, finding.severity, "OPEN", framework,
+                         json.dumps(meta["frameworks"])))
             
         if rows:
             with sqlite3.connect(DB_PATH) as conn:
                 conn.executemany(
                     "INSERT INTO scan_results "
-                    "(target_id, vulnerability_type, severity, status, compliance_framework) "
-                    "VALUES (?, ?, ?, ?, ?)",
+                    "(target_id, vulnerability_type, severity, status, compliance_framework, compliance_frameworks) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
                     rows,
                 )
                 conn.commit()
@@ -521,7 +528,11 @@ async def run_iac_scan(req: IaCScanRequest, background_tasks: BackgroundTasks) -
                 "description": description,
                 "remediation": remediation,
             })
-            rows.append((1, finding.rule_name, finding.severity, "OPEN", primary_framework, finding.filename))
+            rows.append((
+                1, finding.rule_name, finding.severity, "OPEN",
+                primary_framework, finding.filename, json.dumps(frameworks_list),
+                description, remediation,
+            ))
 
         # ── Deduplicate: remove old findings for this target, then insert fresh ─
         if rows:
@@ -537,8 +548,8 @@ async def run_iac_scan(req: IaCScanRequest, background_tasks: BackgroundTasks) -
                         )
                     conn.executemany(
                         "INSERT INTO scan_results "
-                        "(target_id, vulnerability_type, severity, status, compliance_framework, target_path) "
-                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        "(target_id, vulnerability_type, severity, status, compliance_framework, target_path, compliance_frameworks, description, remediation) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         rows,
                     )
                     conn.commit()
@@ -638,8 +649,19 @@ async def export_iac_sarif() -> Dict[str, Any]:
             return generate_sarif([])
             
         with sqlite3.connect(DB_PATH) as conn:
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(scan_results)")
+            }
+            mappings_column = (
+                "compliance_frameworks"
+                if "compliance_frameworks" in columns
+                else "NULL"
+            )
+            description_column = "description" if "description" in columns else "NULL"
+            remediation_column = "remediation" if "remediation" in columns else "NULL"
             rows = conn.execute(
-                "SELECT vulnerability_type, severity, compliance_framework, target_path "
+                "SELECT vulnerability_type, severity, compliance_framework, target_path, "
+                f"{mappings_column}, {description_column}, {remediation_column} "
                 "FROM scan_results WHERE status='OPEN'"
             ).fetchall()
             
@@ -649,16 +671,20 @@ async def export_iac_sarif() -> Dict[str, Any]:
             severity = row[1]
             fw = row[2]
             target_path = row[3] if len(row) > 3 and row[3] else "project-root"
-            
-            from src.scanners.compliance_mapper import get_finding_metadata
-            meta = get_finding_metadata(vuln_type)
+            try:
+                frameworks = json.loads(row[4]) if row[4] else []
+            except (TypeError, ValueError):
+                frameworks = []
+            if not frameworks and fw:
+                frameworks = [fw]
             
             findings.append({
                 "vulnerability_type": vuln_type,
                 "severity": severity,
                 "compliance_framework": fw,
-                "frameworks": meta["frameworks"],
-                "remediation": meta["remediation"],
+                "frameworks": frameworks,
+                "description": row[5] or vuln_type,
+                "remediation": row[6] or "",
                 "target": target_path,
             })
             
