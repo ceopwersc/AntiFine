@@ -41,6 +41,7 @@ from src.models.ai_context import AIContext, AIMessage
 from src.services.ai_explanation import (
     finding_id,
 )
+from src.services.secret_boundary import sanitize_path, sanitize_text
 from src.services.remediation_explanation import (
     REMEDIATION_REVIEW_SYSTEM_PROMPT,
     build_remediation_review_prompt,
@@ -132,7 +133,7 @@ def _ollama_error_message(exc: OllamaError) -> str:
         return "Ollama integration is disabled"
     if "not reachable" in str(exc).lower():
         return "Ollama is not reachable"
-    return str(exc)
+    return sanitize_text(exc, limit=500)
 
 
 # ── Webhook URL validation ──────────────────────────────────────────────────
@@ -198,7 +199,10 @@ def _resolve_and_sandbox(target_path: str) -> Path:
     if not resolved.exists():
         raise HTTPException(
             status_code=422,
-            detail=f"Target path not found: '{target_path}' (resolved to '{resolved}')."
+            detail=(
+                f"Target path not found: '{sanitize_path(target_path)}' "
+                f"(resolved to '{sanitize_path(resolved)}')."
+            )
         )
     return resolved
 
@@ -264,7 +268,7 @@ async def get_analytics_dashboard() -> Dict[str, Any]:
                 "historical_trends": historical_trends
             }
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=sanitize_text(exc, limit=500))
 
 @app.get("/api/dashboard")
 async def get_dashboard() -> Dict[str, Any]:
@@ -299,9 +303,43 @@ async def get_dashboard() -> Dict[str, Any]:
                         compliance_status[framework] = "Failing"
                     
     except sqlite3.Error as exc:
-        raise HTTPException(status_code=500, detail=f"Database error: {exc}")
+        raise HTTPException(status_code=500, detail=f"Database error: {sanitize_text(exc, limit=500)}")
         
     return {"status": "ok", "counts": counts, "compliance": compliance_status}
+
+
+@app.get("/api/findings/secrets")
+async def get_secret_findings() -> Dict[str, Any]:
+    """Return persisted secret findings without source values."""
+    if not DB_PATH.is_file():
+        return {"status": "ok", "findings": []}
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            rows = conn.execute(
+                "SELECT vulnerability_type, severity, status, target_path, timestamp "
+                "FROM scan_results WHERE vulnerability_type LIKE '%Vendor Match%' "
+                "OR vulnerability_type LIKE '%Entropy%' "
+                "OR vulnerability_type LIKE '%secret%' "
+                "OR vulnerability_type LIKE '%Secret%' "
+                "OR vulnerability_type LIKE '%token%' "
+                "OR vulnerability_type LIKE '%Token%' "
+                "ORDER BY timestamp DESC, id DESC"
+            ).fetchall()
+        return {
+            "status": "ok",
+            "findings": [
+                {
+                    "rule_name": sanitize_text(row[0], limit=512),
+                    "severity": sanitize_text(row[1], limit=32),
+                    "status": sanitize_text(row[2], limit=32),
+                    "filename": sanitize_path(row[3] or "unknown", limit=512),
+                    "detected": sanitize_text(row[4], limit=64),
+                }
+                for row in rows
+            ],
+        }
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=500, detail="Could not read secret findings") from exc
 
 
 @app.post("/api/scan/ssrf")
@@ -331,7 +369,7 @@ async def run_ssrf_scan(req: SSRFScanRequest, background_tasks: BackgroundTasks)
                 
         return {"status": "success", "message": f"SSRF scan completed for {req.target_url}"}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=sanitize_text(exc, limit=500))
 
 
 @app.get("/api/ai/health")
@@ -360,10 +398,10 @@ async def ollama_test(req: AITestRequest) -> Dict[str, str]:
     if not req.prompt.strip():
         raise HTTPException(status_code=422, detail="Prompt must not be empty")
     try:
-        response = await OllamaService().generate(req.prompt)
-        return {"response": response}
+        response = await OllamaService().generate(sanitize_text(req.prompt, limit=12000))
+        return {"response": sanitize_text(response, limit=12000)}
     except OllamaDisabledError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail=_ollama_error_message(exc)) from exc
     except OllamaError as exc:
         raise HTTPException(status_code=502, detail=_ollama_error_message(exc)) from exc
 
@@ -399,12 +437,12 @@ async def explain_finding(req: FindingExplanationRequest) -> Dict[str, Any]:
             "finding_id": finding_id(req.finding),
             "model": service.config.model,
             "provider": "ollama",
-            "explanation": explanation,
+            "explanation": sanitize_text(explanation, limit=12000),
             "generated_locally": True,
             "sources": source_metadata(retrieved),
         }
     except OllamaDisabledError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail=_ollama_error_message(exc)) from exc
     except OllamaError as exc:
         raise HTTPException(status_code=502, detail=_ollama_error_message(exc)) from exc
 
@@ -445,6 +483,7 @@ async def ask_ai(req: AIAskRequest) -> Dict[str, Any]:
         answer = fallback or sanitize_unmapped_compliance_claims(
             answer, req.question, req.context, retrieved
         )
+        answer = sanitize_text(answer, limit=12000)
         return {
             "answer": answer,
             "model": service.config.model,
@@ -452,7 +491,7 @@ async def ask_ai(req: AIAskRequest) -> Dict[str, Any]:
             "sources": source_metadata(retrieved),
         }
     except OllamaDisabledError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail=_ollama_error_message(exc)) from exc
     except OllamaError as exc:
         raise HTTPException(status_code=502, detail=_ollama_error_message(exc)) from exc
 
@@ -479,11 +518,11 @@ async def explain_remediation(req: RemediationExplanationRequest) -> Dict[str, A
             "finding_id": finding_id(req.finding),
             "model": service.config.model,
             "provider": "ollama",
-            "explanation": explanation,
+            "explanation": sanitize_text(explanation, limit=12000),
             "generated_locally": True,
         }
     except OllamaDisabledError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail=_ollama_error_message(exc)) from exc
     except OllamaError as exc:
         raise HTTPException(status_code=502, detail=_ollama_error_message(exc)) from exc
 
@@ -521,17 +560,19 @@ async def run_iac_scan(req: IaCScanRequest, background_tasks: BackgroundTasks) -
                 description = meta["description"]
 
             enriched.append({
-                "rule_name": finding.rule_name,
+                "rule_name": sanitize_text(finding.rule_name, limit=1000),
                 "severity": finding.severity,
-                "compliance_framework": primary_framework,
-                "frameworks": frameworks_list,
-                "description": description,
-                "remediation": remediation,
+                "compliance_framework": sanitize_text(primary_framework, limit=512),
+                "frameworks": [sanitize_text(item, limit=512) for item in frameworks_list],
+                "description": sanitize_text(description, limit=4000),
+                "remediation": sanitize_text(remediation, limit=4000),
             })
             rows.append((
-                1, finding.rule_name, finding.severity, "OPEN",
-                primary_framework, finding.filename, json.dumps(frameworks_list),
-                description, remediation,
+                1, sanitize_text(finding.rule_name, limit=1000), finding.severity, "OPEN",
+                primary_framework,
+                sanitize_path(finding.filename),
+                json.dumps(frameworks_list),
+                sanitize_text(description, limit=4000), sanitize_text(remediation, limit=4000),
             ))
 
         # ── Deduplicate: remove old findings for this target, then insert fresh ─
@@ -540,7 +581,7 @@ async def run_iac_scan(req: IaCScanRequest, background_tasks: BackgroundTasks) -
                 initialize_database()
                 with sqlite3.connect(DB_PATH) as conn:
                     # Delete previous findings for the same target path
-                    target_filenames = {finding.filename for finding in raw_findings}
+                    target_filenames = {sanitize_path(finding.filename) for finding in raw_findings}
                     for tf in target_filenames:
                         conn.execute(
                             "DELETE FROM scan_results WHERE target_path = ?",
@@ -574,7 +615,7 @@ async def run_iac_scan(req: IaCScanRequest, background_tasks: BackgroundTasks) -
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=sanitize_text(exc, limit=500))
 
 
 @app.post("/api/scan/iac/remediate")
@@ -596,11 +637,11 @@ async def remediate_iac(req: RemediationRequest) -> Dict[str, Any]:
             ],
         }
     except (RemediationError, UnicodeDecodeError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail=sanitize_text(exc, limit=500)) from exc
     except HTTPException:
         raise
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"Could not update target: {exc}") from exc
+        raise HTTPException(status_code=500, detail=f"Could not update target: {sanitize_text(exc, limit=400)}") from exc
 
 
 @app.get("/api/integrations/webhooks")
@@ -611,7 +652,7 @@ async def get_webhooks() -> Dict[str, Any]:
             webhooks = [{"id": r[0], "url": r[1], "min_severity": r[2]} for r in rows]
             return {"status": "ok", "webhooks": webhooks}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=sanitize_text(exc, limit=500))
 
 @app.post("/api/integrations/webhooks")
 async def save_webhook(req: WebhookModel) -> Dict[str, Any]:
@@ -626,7 +667,7 @@ async def save_webhook(req: WebhookModel) -> Dict[str, Any]:
             conn.commit()
         return {"status": "success", "message": "Webhook saved"}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=sanitize_text(exc, limit=500))
 
 @app.post("/api/integrations/test")
 async def test_webhook(req: WebhookTestModel, background_tasks: BackgroundTasks) -> Dict[str, Any]:
@@ -691,7 +732,7 @@ async def export_iac_sarif() -> Dict[str, Any]:
         sarif_report = generate_sarif(findings)
         return sarif_report
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=sanitize_text(exc, limit=500))
 
 
 @app.post("/api/report/generate")

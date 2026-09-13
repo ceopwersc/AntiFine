@@ -13,6 +13,7 @@ from pathlib import Path
 
 from database.setup import DB_PATH
 from src.reporting.generate import fetch_scan_results, ReportError
+from src.services.secret_boundary import sanitize_path, sanitize_text
 
 SARIF_LEVEL_MAP = {
     "CRITICAL": "error",
@@ -69,15 +70,15 @@ def generate_sarif(findings: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
     for finding in findings:
-        vuln_type = finding.get("vulnerability_type", "Unknown Vulnerability")
+        vuln_type = sanitize_text(finding.get("vulnerability_type", "Unknown Vulnerability"), limit=1000)
         severity = finding.get("severity", "LOW").upper()
         level = severity_map.get(severity, "note")
         frameworks = finding.get("frameworks")
         if frameworks is None:
             frameworks = finding.get("compliance_frameworks", [])
         frameworks = list(frameworks or [])
-        remediation = finding.get("remediation", "")
-        description = finding.get("description") or vuln_type
+        remediation = sanitize_text(finding.get("remediation", ""), limit=4000)
+        description = sanitize_text(finding.get("description") or vuln_type, limit=4000)
         
         # Generate a stable rule ID based on the vulnerability type hash
         rule_hash = hashlib.md5(vuln_type.encode('utf-8')).hexdigest()[:6]
@@ -95,7 +96,7 @@ def generate_sarif(findings: list[dict[str, Any]]) -> dict[str, Any]:
             })
             seen_rules.add(rule_id)
             
-        target = finding.get("target", "project-root")
+        target = sanitize_path(finding.get("target", "project-root"))
         
         results.append({
             "ruleId": rule_id,

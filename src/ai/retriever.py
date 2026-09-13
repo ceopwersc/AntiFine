@@ -76,11 +76,23 @@ class Retriever:
                 rule_id=rule.rule_id,
                 technology=rule.technology,
                 frameworks=rule.frameworks,
-                text=rule.as_prompt_context(),
+                text=sanitize_text(rule.as_prompt_context(), limit=12000),
             )
             for rule in service.rules
         ]
-        chunks.extend(chunk for path in sorted(DOCS_ROOT.glob("*.md")) for chunk in _chunk_markdown(path))
+        chunks.extend(
+            KnowledgeChunk(
+                id=chunk.id,
+                source=sanitize_text(chunk.source, limit=512),
+                title=sanitize_text(chunk.title, limit=512),
+                rule_id=chunk.rule_id,
+                technology=chunk.technology,
+                frameworks=chunk.frameworks,
+                text=sanitize_text(chunk.text, limit=12000),
+            )
+            for path in sorted(DOCS_ROOT.glob("*.md"))
+            for chunk in _chunk_markdown(path)
+        )
         self._chunks = tuple(chunks)
         return list(self._chunks)
 
@@ -108,7 +120,7 @@ class Retriever:
                     rule_id=item.get("rule_id"),
                     technology=item.get("technology"),
                     frameworks=tuple(item.get("frameworks", [])),
-                    text=str(item["text"]),
+                    text=sanitize_text(item["text"], limit=12000),
                 )
                 for item in raw_chunks
             )

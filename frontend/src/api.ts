@@ -112,6 +112,18 @@ export const fetchDashboardStats = async () => {
   return (await apiClient.get('/dashboard')).data;
 };
 
+export interface SecretFinding {
+  rule_name: string;
+  severity: string;
+  status: string;
+  filename: string;
+  detected: string;
+}
+
+export const fetchSecretFindings = async (): Promise<{ status: string; findings: SecretFinding[] }> => {
+  return (await apiClient.get<{ status: string; findings: SecretFinding[] }>('/findings/secrets')).data;
+};
+
 export const runScan = async (target: string, type: string) => {
   const isIaC = type === 'IaC Config Audit';
   const endpoint = isIaC ? '/scan/iac' : '/scan/ssrf';

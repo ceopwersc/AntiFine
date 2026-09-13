@@ -23,6 +23,7 @@ from database.setup import DB_PATH, initialize_database  # noqa: E402
 from src.models.finding import Finding  # noqa: E402
 from src.scanners.compliance_mapper import get_finding_metadata  # noqa: E402
 from src.scanners.secret_scanner import scan_value_for_secrets  # noqa: E402
+from src.services.secret_boundary import sanitize_path, sanitize_text  # noqa: E402
 
 
 class IaCScannerError(RuntimeError):
@@ -286,12 +287,12 @@ def analyze_kubernetes(content: str, filename: str) -> list[Finding]:
         documents = list(yaml.safe_load_all(content))
     except yaml.YAMLError as exc:
         findings.append(Finding(
-            rule_name=f"YAML Parse Error in {filename}",
+            rule_name=f"YAML Parse Error in {sanitize_path(filename)}",
             severity="CRITICAL",
             filename=filename,
             frameworks=["Internal"],
             remediation="Fix the YAML syntax before scanning.",
-            description=str(exc),
+            description=sanitize_text(exc, limit=2000),
         ))
         return findings
 
@@ -438,12 +439,12 @@ def analyze_terraform(content: str, filename: str) -> list[Finding]:
         doc = hcl2.loads(content)
     except Exception as exc:
         findings.append(Finding(
-            rule_name=f"HCL Parse Error in {filename}",
+            rule_name=f"HCL Parse Error in {sanitize_path(filename)}",
             severity="CRITICAL",
             filename=filename,
             frameworks=["Internal"],
             remediation="Fix the HCL syntax before scanning.",
-            description=str(exc),
+            description=sanitize_text(exc, limit=2000),
         ))
         return findings
 
@@ -592,7 +593,7 @@ def scan_file(filepath: Path) -> list[Finding]:
         print(f"[warning] Could not read {filepath}: {exc}", file=sys.stderr)
         return []
 
-    filename = filepath.name
+    filename = sanitize_path(filepath.name)
     if "Dockerfile" in filename:
         return analyze_dockerfile(content, filename)
     elif filename.endswith((".yaml", ".yml")):
@@ -619,7 +620,7 @@ def run_iac_audit(
     """
     path = Path(target_path)
     if not path.exists():
-        raise IaCScannerError(f"Target path does not exist: {target_path}")
+        raise IaCScannerError(f"Target path does not exist: {sanitize_path(target_path)}")
 
     all_findings: list[Finding] = []
 
@@ -645,14 +646,14 @@ def run_iac_audit(
                 frameworks = get_finding_metadata(finding.rule_name)["frameworks"]
             rows.append((
                 target_id,
-                finding.rule_name,
+                sanitize_text(finding.rule_name, limit=1000),
                 finding.severity,
                 "OPEN",
                 frameworks[0] if frameworks else "Unmapped",
                 json.dumps(frameworks),
-                finding.description,
-                finding.remediation,
-                finding.filename,
+                sanitize_text(finding.description, limit=4000),
+                sanitize_text(finding.remediation, limit=4000),
+                sanitize_path(finding.filename),
             ))
 
         try:

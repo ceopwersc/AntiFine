@@ -26,6 +26,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from database.setup import DB_PATH  # noqa: E402
+from src.services.secret_boundary import sanitize_path, sanitize_text  # noqa: E402
 
 REPORT_PATH: Path = PROJECT_ROOT / "compliance_report.md"
 
@@ -199,12 +200,12 @@ def fetch_scan_results(db_path: Path = DB_PATH) -> list[ScanRecord]:
         ScanRecord(
             id=row["id"],
             target_id=row["target_id"],
-            vulnerability_type=row["vulnerability_type"] or "(unspecified)",
+            vulnerability_type=sanitize_text(row["vulnerability_type"] or "(unspecified)", limit=1000),
             severity=row["severity"] or "",
             status=row["status"] or "UNKNOWN",
             timestamp=row["timestamp"] or "",
-            description_text=row["description"] or "",
-            remediation_text=row["remediation"] or "",
+            description_text=sanitize_text(row["description"] or "", limit=4000),
+            remediation_text=sanitize_text(row["remediation"] or "", limit=4000),
             frameworks=tuple(
                 _parse_frameworks(row["compliance_frameworks"])
                 or ([row["compliance_framework"]] if row["compliance_framework"] else [])
@@ -246,7 +247,7 @@ def group_by_severity(
 
 def _escape_cell(text: str) -> str:
     """Make a value safe to embed in a Markdown table cell."""
-    return (text or "").replace("|", "\\|").replace("\n", " ").strip()
+    return sanitize_text(text or "").replace("|", "\\|").replace("\n", " ").strip()
 
 
 def render_report(

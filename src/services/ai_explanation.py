@@ -3,33 +3,13 @@
 from __future__ import annotations
 
 import hashlib
-import re
 from dataclasses import asdict
 
 from src.models.finding import Finding
 from src.ai.knowledge_service import RuleMetadata
+from src.services.secret_boundary import sanitize_text
 
 MAX_CODE_CONTEXT = 4000
-
-_SECRET_PATTERNS = (
-    (re.compile(r"\b(?:AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16}\b"), "[REDACTED AWS KEY]"),
-    (re.compile(r"\bghp_[A-Za-z0-9_]{36}\b|\bgithub_pat_[A-Za-z0-9_]{82}\b"), "[REDACTED GITHUB TOKEN]"),
-    (re.compile(r"\bxox[baprs]-[0-9]{10,13}-[0-9]{10,13}[A-Za-z0-9]*\b"), "[REDACTED SLACK TOKEN]"),
-    (
-        re.compile(
-            r"-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----",
-            re.IGNORECASE | re.DOTALL,
-        ),
-        "[REDACTED PRIVATE KEY]",
-    ),
-    (
-        re.compile(
-            r"(?i)\b(?:password|passwd|secret|token|api[_-]?key|access[_-]?key)"
-            r"(\s*[:=]\s*)([\"']?)(?:\[[^\]]+\]|[^\s\"']+)\2"
-        ),
-        r"\1[REDACTED CREDENTIAL]",
-    ),
-)
 
 SYSTEM_PROMPT = """You are the AntiFine Security Assistant.
 
@@ -63,16 +43,6 @@ rule exists unless AntiFine supplied it in the rule context. Never generate a
 security verdict independently of AntiFine. Clearly label general security
 knowledge as general guidance rather than AntiFine-detected fact.
 """
-
-
-def sanitize_text(value: str, *, limit: int | None = None) -> str:
-    """Redact common credentials and optionally truncate untrusted text."""
-    sanitized = value
-    for pattern, replacement in _SECRET_PATTERNS:
-        sanitized = pattern.sub(replacement, sanitized)
-    if limit is not None and len(sanitized) > limit:
-        sanitized = sanitized[:limit] + "\n[TRUNCATED]"
-    return sanitized
 
 
 def finding_id(finding: Finding) -> str:
