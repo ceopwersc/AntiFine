@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from contextlib import closing
 from pathlib import Path
 
 # Project root, so the database lands in a predictable place no matter
@@ -32,6 +33,9 @@ CREATE TABLE IF NOT EXISTS scan_results (
     severity TEXT,
     status TEXT,
     compliance_framework TEXT,
+    compliance_frameworks TEXT,
+    description TEXT,
+    remediation TEXT,
     target_path TEXT,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 )
@@ -59,7 +63,7 @@ def initialize_database(db_path: Path = DB_PATH) -> Path:
     """
     try:
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(db_path) as connection:
+        with closing(sqlite3.connect(db_path)) as connection:
             cursor = connection.cursor()
             cursor.execute(AUDIT_TARGETS_DDL)
             cursor.execute(SCAN_RESULTS_DDL)
@@ -71,6 +75,31 @@ def initialize_database(db_path: Path = DB_PATH) -> Path:
             except sqlite3.OperationalError:
                 # Column might already exist, which is fine
                 pass
+
+            # JSON array of authoritative mappings.  Keep the legacy
+            # compliance_framework column for old clients and migration.
+            try:
+                cursor.execute("ALTER TABLE scan_results ADD COLUMN compliance_frameworks TEXT")
+            except sqlite3.OperationalError:
+                pass
+            for column in ("description", "remediation"):
+                try:
+                    cursor.execute(f"ALTER TABLE scan_results ADD COLUMN {column} TEXT")
+                except sqlite3.OperationalError:
+                    pass
+
+            # A legacy row has exactly one authoritative mapping: its old
+            # primary framework.  Do not reconstruct mappings from text.
+            import json
+            legacy_rows = cursor.execute(
+                "SELECT id, compliance_framework FROM scan_results "
+                "WHERE (compliance_frameworks IS NULL OR compliance_frameworks = '') "
+                "AND compliance_framework IS NOT NULL AND compliance_framework != ''"
+            ).fetchall()
+            cursor.executemany(
+                "UPDATE scan_results SET compliance_frameworks = ? WHERE id = ?",
+                [(json.dumps([framework]), row_id) for row_id, framework in legacy_rows],
+            )
 
             # Add target_path column to existing databases
             try:

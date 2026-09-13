@@ -10,7 +10,9 @@ from __future__ import annotations
 import re
 import sqlite3
 import sys
+import json
 import yaml
+from contextlib import closing
 from pathlib import Path
 
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
@@ -19,7 +21,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from database.setup import DB_PATH, initialize_database  # noqa: E402
 from src.models.finding import Finding  # noqa: E402
+from src.scanners.compliance_mapper import get_finding_metadata  # noqa: E402
 from src.scanners.secret_scanner import scan_value_for_secrets  # noqa: E402
+from src.services.secret_boundary import sanitize_path, sanitize_text  # noqa: E402
 
 
 class IaCScannerError(RuntimeError):
@@ -283,12 +287,12 @@ def analyze_kubernetes(content: str, filename: str) -> list[Finding]:
         documents = list(yaml.safe_load_all(content))
     except yaml.YAMLError as exc:
         findings.append(Finding(
-            rule_name=f"YAML Parse Error in {filename}",
+            rule_name=f"YAML Parse Error in {sanitize_path(filename)}",
             severity="CRITICAL",
             filename=filename,
             frameworks=["Internal"],
             remediation="Fix the YAML syntax before scanning.",
-            description=str(exc),
+            description=sanitize_text(exc, limit=2000),
         ))
         return findings
 
@@ -435,12 +439,12 @@ def analyze_terraform(content: str, filename: str) -> list[Finding]:
         doc = hcl2.loads(content)
     except Exception as exc:
         findings.append(Finding(
-            rule_name=f"HCL Parse Error in {filename}",
+            rule_name=f"HCL Parse Error in {sanitize_path(filename)}",
             severity="CRITICAL",
             filename=filename,
             frameworks=["Internal"],
             remediation="Fix the HCL syntax before scanning.",
-            description=str(exc),
+            description=sanitize_text(exc, limit=2000),
         ))
         return findings
 
@@ -589,7 +593,7 @@ def scan_file(filepath: Path) -> list[Finding]:
         print(f"[warning] Could not read {filepath}: {exc}", file=sys.stderr)
         return []
 
-    filename = filepath.name
+    filename = sanitize_path(filepath.name)
     if "Dockerfile" in filename:
         return analyze_dockerfile(content, filename)
     elif filename.endswith((".yaml", ".yml")):
@@ -616,7 +620,7 @@ def run_iac_audit(
     """
     path = Path(target_path)
     if not path.exists():
-        raise IaCScannerError(f"Target path does not exist: {target_path}")
+        raise IaCScannerError(f"Target path does not exist: {sanitize_path(target_path)}")
 
     all_findings: list[Finding] = []
 
@@ -637,21 +641,30 @@ def run_iac_audit(
     if persist and all_findings:
         rows = []
         for finding in all_findings:
+            frameworks = finding.frameworks
+            if not frameworks:
+                frameworks = get_finding_metadata(finding.rule_name)["frameworks"]
             rows.append((
                 target_id,
-                finding.rule_name,
+                sanitize_text(finding.rule_name, limit=1000),
                 finding.severity,
                 "OPEN",
-                finding.filename,
+                frameworks[0] if frameworks else "Unmapped",
+                json.dumps(frameworks),
+                sanitize_text(finding.description, limit=4000),
+                sanitize_text(finding.remediation, limit=4000),
+                sanitize_path(finding.filename),
             ))
 
         try:
             initialize_database(db_path)
-            with sqlite3.connect(db_path) as connection:
+            with closing(sqlite3.connect(db_path)) as connection:
+                connection.execute("BEGIN")
                 connection.executemany(
                     "INSERT INTO scan_results "
-                    "(target_id, vulnerability_type, severity, status, target_path) "
-                    "VALUES (?, ?, ?, ?, ?)",
+                    "(target_id, vulnerability_type, severity, status, "
+                    "compliance_framework, compliance_frameworks, description, "
+                    "remediation, target_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     rows,
                 )
                 connection.commit()

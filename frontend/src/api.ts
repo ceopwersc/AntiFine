@@ -21,6 +21,75 @@ export interface FindingExplanation {
   generated_locally: boolean;
 }
 
+export interface AIHealth {
+  enabled: boolean;
+  available: boolean;
+  provider: string;
+  model: string;
+  error?: string;
+}
+
+export interface AskSource {
+  title: string;
+  source: string;
+  rule_id?: string | null;
+}
+
+export interface AskResponse {
+  answer: string;
+  model: string;
+  provider: string;
+  sources: AskSource[];
+}
+
+export interface AskContext {
+  finding_id: string;
+  rule_id?: string;
+  title: string;
+  severity: string;
+  technology: string;
+  framework?: string;
+  frameworks?: string[];
+  file?: string;
+  line?: number;
+  status?: string;
+  description?: string;
+  remediation?: string;
+  code_context?: string;
+}
+
+export interface AskMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export const fetchAIHealth = async (): Promise<AIHealth> => {
+  return (await apiClient.get<AIHealth>('/ai/health')).data;
+};
+
+export const askAntiFine = async (question: string, context?: AskContext, messages: AskMessage[] = []): Promise<AskResponse> => {
+  const response = await apiClient.post<AskResponse>('/ai/ask', {
+    question,
+    context: context ? {
+      source: 'finding',
+      finding: {
+        rule_id: context.rule_id,
+        title: context.title,
+        severity: context.severity,
+        technology: context.technology,
+        file: context.file ?? context.finding_id,
+        line: context.line,
+        frameworks: context.frameworks ?? (context.framework ? [context.framework] : []),
+        status: context.status,
+        description: context.description,
+        remediation: context.remediation,
+      },
+    } : undefined,
+    messages: messages.slice(-10).map(({ role, content }) => ({ role, content: content.slice(0, 1200) })),
+  });
+  return response.data;
+};
+
 export interface RemediationExplanationRequest {
   finding: ExplainableFinding;
   before: string;
@@ -43,6 +112,18 @@ export const fetchDashboardStats = async () => {
   return (await apiClient.get('/dashboard')).data;
 };
 
+export interface SecretFinding {
+  rule_name: string;
+  severity: string;
+  status: string;
+  filename: string;
+  detected: string;
+}
+
+export const fetchSecretFindings = async (): Promise<{ status: string; findings: SecretFinding[] }> => {
+  return (await apiClient.get<{ status: string; findings: SecretFinding[] }>('/findings/secrets')).data;
+};
+
 export const runScan = async (target: string, type: string) => {
   const isIaC = type === 'IaC Config Audit';
   const endpoint = isIaC ? '/scan/iac' : '/scan/ssrf';
@@ -51,7 +132,14 @@ export const runScan = async (target: string, type: string) => {
 };
 
 export const remediateFinding = async (target: string, ruleName: string) => {
-  return (await apiClient.post('/scan/iac/remediate', {
+  return (await apiClient.post<{
+    status: string;
+    target: string;
+    backup: string;
+    action: string;
+    findings_count: number;
+    findings: Array<{ rule_name: string; severity: string }>;
+  }>('/scan/iac/remediate', {
     target_path: target,
     rule_name: ruleName,
   })).data;

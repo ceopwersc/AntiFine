@@ -5,6 +5,7 @@ for decoupling the frontend from the core execution logic.
 """
 
 import ipaddress
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -13,7 +14,7 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import uvicorn
 
 # Ensure the src directory is in the path
@@ -36,16 +37,24 @@ from src.services.ollama_service import (
     OllamaService,
 )
 from src.models.finding import Finding
+from src.models.ai_context import AIContext, AIMessage
 from src.services.ai_explanation import (
-    SYSTEM_PROMPT,
-    build_explanation_prompt,
     finding_id,
 )
+from src.services.secret_boundary import sanitize_path, sanitize_text
 from src.services.remediation_explanation import (
     REMEDIATION_REVIEW_SYSTEM_PROMPT,
     build_remediation_review_prompt,
 )
 from src.ai.knowledge_service import find_rule_for_finding
+from src.ai.context_builder import (
+    build_context,
+    unmapped_compliance_fallback,
+    sanitize_unmapped_compliance_claims,
+    source_metadata,
+)
+from src.ai.prompts import EXPLANATION_SYSTEM_PROMPT, GENERAL_SYSTEM_PROMPT
+from src.ai.retriever import retrieve
 
 
 # ── Initialization ──────────────────────────────────────────────────────────
@@ -98,6 +107,13 @@ class FindingExplanationRequest(BaseModel):
     finding: Finding
     code_context: str | None = None
 
+class AIAskRequest(BaseModel):
+    question: str
+    # ``str`` keeps older local clients working while new clients get a
+    # validated, structured context contract.
+    context: AIContext | str | None = None
+    messages: list[AIMessage] = Field(default_factory=list, max_length=10)
+
 class RemediationExplanationRequest(BaseModel):
     finding: Finding
     before: str
@@ -117,7 +133,7 @@ def _ollama_error_message(exc: OllamaError) -> str:
         return "Ollama integration is disabled"
     if "not reachable" in str(exc).lower():
         return "Ollama is not reachable"
-    return str(exc)
+    return sanitize_text(exc, limit=500)
 
 
 # ── Webhook URL validation ──────────────────────────────────────────────────
@@ -183,7 +199,10 @@ def _resolve_and_sandbox(target_path: str) -> Path:
     if not resolved.exists():
         raise HTTPException(
             status_code=422,
-            detail=f"Target path not found: '{target_path}' (resolved to '{resolved}')."
+            detail=(
+                f"Target path not found: '{sanitize_path(target_path)}' "
+                f"(resolved to '{sanitize_path(resolved)}')."
+            )
         )
     return resolved
 
@@ -249,7 +268,7 @@ async def get_analytics_dashboard() -> Dict[str, Any]:
                 "historical_trends": historical_trends
             }
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=sanitize_text(exc, limit=500))
 
 @app.get("/api/dashboard")
 async def get_dashboard() -> Dict[str, Any]:
@@ -271,18 +290,56 @@ async def get_dashboard() -> Dict[str, Any]:
                     
             # Fetch compliance frameworks
             comp_rows = conn.execute(
-                "SELECT compliance_framework, COUNT(*) "
-                "FROM scan_results WHERE compliance_framework IS NOT NULL AND compliance_framework != 'Unmapped' "
-                "GROUP BY compliance_framework"
+                "SELECT compliance_framework, compliance_frameworks "
+                "FROM scan_results WHERE status = 'OPEN'"
             ).fetchall()
-            for fw, cnt in comp_rows:
-                if fw:
-                    compliance_status[fw] = "Failing" if cnt > 0 else "Passing"
+            for primary, encoded in comp_rows:
+                try:
+                    frameworks = json.loads(encoded) if encoded else []
+                except (TypeError, ValueError):
+                    frameworks = []
+                for framework in frameworks or ([primary] if primary else []):
+                    if framework and framework != "Unmapped":
+                        compliance_status[framework] = "Failing"
                     
     except sqlite3.Error as exc:
-        raise HTTPException(status_code=500, detail=f"Database error: {exc}")
+        raise HTTPException(status_code=500, detail=f"Database error: {sanitize_text(exc, limit=500)}")
         
     return {"status": "ok", "counts": counts, "compliance": compliance_status}
+
+
+@app.get("/api/findings/secrets")
+async def get_secret_findings() -> Dict[str, Any]:
+    """Return persisted secret findings without source values."""
+    if not DB_PATH.is_file():
+        return {"status": "ok", "findings": []}
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            rows = conn.execute(
+                "SELECT vulnerability_type, severity, status, target_path, timestamp "
+                "FROM scan_results WHERE vulnerability_type LIKE '%Vendor Match%' "
+                "OR vulnerability_type LIKE '%Entropy%' "
+                "OR vulnerability_type LIKE '%secret%' "
+                "OR vulnerability_type LIKE '%Secret%' "
+                "OR vulnerability_type LIKE '%token%' "
+                "OR vulnerability_type LIKE '%Token%' "
+                "ORDER BY timestamp DESC, id DESC"
+            ).fetchall()
+        return {
+            "status": "ok",
+            "findings": [
+                {
+                    "rule_name": sanitize_text(row[0], limit=512),
+                    "severity": sanitize_text(row[1], limit=32),
+                    "status": sanitize_text(row[2], limit=32),
+                    "filename": sanitize_path(row[3] or "unknown", limit=512),
+                    "detected": sanitize_text(row[4], limit=64),
+                }
+                for row in rows
+            ],
+        }
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=500, detail="Could not read secret findings") from exc
 
 
 @app.post("/api/scan/ssrf")
@@ -294,15 +351,17 @@ async def run_ssrf_scan(req: SSRFScanRequest, background_tasks: BackgroundTasks)
         rows = []
         for finding in findings:
             vuln_type = finding.vulnerability_type
-            framework = map_finding_to_framework(vuln_type)
-            rows.append((1, vuln_type, finding.severity, "OPEN", framework))
+            meta = get_finding_metadata(vuln_type)
+            framework = meta["primary_framework"]
+            rows.append((1, vuln_type, finding.severity, "OPEN", framework,
+                         json.dumps(meta["frameworks"])))
             
         if rows:
             with sqlite3.connect(DB_PATH) as conn:
                 conn.executemany(
                     "INSERT INTO scan_results "
-                    "(target_id, vulnerability_type, severity, status, compliance_framework) "
-                    "VALUES (?, ?, ?, ?, ?)",
+                    "(target_id, vulnerability_type, severity, status, compliance_framework, compliance_frameworks) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
                     rows,
                 )
                 conn.commit()
@@ -310,7 +369,7 @@ async def run_ssrf_scan(req: SSRFScanRequest, background_tasks: BackgroundTasks)
                 
         return {"status": "success", "message": f"SSRF scan completed for {req.target_url}"}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=sanitize_text(exc, limit=500))
 
 
 @app.get("/api/ai/health")
@@ -339,10 +398,10 @@ async def ollama_test(req: AITestRequest) -> Dict[str, str]:
     if not req.prompt.strip():
         raise HTTPException(status_code=422, detail="Prompt must not be empty")
     try:
-        response = await OllamaService().generate(req.prompt)
-        return {"response": response}
+        response = await OllamaService().generate(sanitize_text(req.prompt, limit=12000))
+        return {"response": sanitize_text(response, limit=12000)}
     except OllamaDisabledError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail=_ollama_error_message(exc)) from exc
     except OllamaError as exc:
         raise HTTPException(status_code=502, detail=_ollama_error_message(exc)) from exc
 
@@ -352,23 +411,87 @@ async def explain_finding(req: FindingExplanationRequest) -> Dict[str, Any]:
     """Explain an existing deterministic finding using the local model."""
     service = OllamaService()
     try:
+        matched_rule = find_rule_for_finding(req.finding)
+        query = " ".join(
+            filter(
+                None,
+                [
+                    matched_rule.rule_id if matched_rule else "",
+                    req.finding.rule_name,
+                    req.finding.severity,
+                    *req.finding.frameworks,
+                ],
+            )
+        )
+        retrieved = retrieve(query, top_k=5)
         explanation = await service.generate(
-            build_explanation_prompt(
+            build_context(
+                "Explain this existing AntiFine finding.",
+                retrieved,
                 req.finding,
                 req.code_context,
-                find_rule_for_finding(req.finding),
             ),
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=EXPLANATION_SYSTEM_PROMPT,
         )
         return {
             "finding_id": finding_id(req.finding),
             "model": service.config.model,
             "provider": "ollama",
-            "explanation": explanation,
+            "explanation": sanitize_text(explanation, limit=12000),
             "generated_locally": True,
+            "sources": source_metadata(retrieved),
         }
     except OllamaDisabledError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail=_ollama_error_message(exc)) from exc
+    except OllamaError as exc:
+        raise HTTPException(status_code=502, detail=_ollama_error_message(exc)) from exc
+
+
+@app.post("/api/ai/ask")
+async def ask_ai(req: AIAskRequest) -> Dict[str, Any]:
+    """Answer a question using retrieved local AntiFine knowledge."""
+    if not req.question.strip():
+        raise HTTPException(status_code=422, detail="Question must not be empty")
+    context_text = build_context(
+        req.question,
+        [],
+        structured_context=req.context,
+    )
+    rule_id = None
+    frameworks = None
+    if isinstance(req.context, AIContext) and req.context.source == "finding" and req.context.finding:
+        rule_id = req.context.finding.rule_id
+        frameworks = req.context.finding.frameworks
+    retrieved = retrieve(
+        f"{req.question}\n{context_text}",
+        top_k=5,
+        authoritative_rule_id=rule_id,
+        authoritative_frameworks=frameworks,
+    )
+    try:
+        service = OllamaService()
+        answer = await service.generate(
+            build_context(
+                req.question,
+                retrieved,
+                structured_context=req.context,
+                messages=req.messages,
+            ),
+            system_prompt=GENERAL_SYSTEM_PROMPT,
+        )
+        fallback = unmapped_compliance_fallback(req.question, req.context, retrieved)
+        answer = fallback or sanitize_unmapped_compliance_claims(
+            answer, req.question, req.context, retrieved
+        )
+        answer = sanitize_text(answer, limit=12000)
+        return {
+            "answer": answer,
+            "model": service.config.model,
+            "provider": "ollama",
+            "sources": source_metadata(retrieved),
+        }
+    except OllamaDisabledError as exc:
+        raise HTTPException(status_code=503, detail=_ollama_error_message(exc)) from exc
     except OllamaError as exc:
         raise HTTPException(status_code=502, detail=_ollama_error_message(exc)) from exc
 
@@ -395,11 +518,11 @@ async def explain_remediation(req: RemediationExplanationRequest) -> Dict[str, A
             "finding_id": finding_id(req.finding),
             "model": service.config.model,
             "provider": "ollama",
-            "explanation": explanation,
+            "explanation": sanitize_text(explanation, limit=12000),
             "generated_locally": True,
         }
     except OllamaDisabledError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail=_ollama_error_message(exc)) from exc
     except OllamaError as exc:
         raise HTTPException(status_code=502, detail=_ollama_error_message(exc)) from exc
 
@@ -437,14 +560,20 @@ async def run_iac_scan(req: IaCScanRequest, background_tasks: BackgroundTasks) -
                 description = meta["description"]
 
             enriched.append({
-                "rule_name": finding.rule_name,
+                "rule_name": sanitize_text(finding.rule_name, limit=1000),
                 "severity": finding.severity,
-                "compliance_framework": primary_framework,
-                "frameworks": frameworks_list,
-                "description": description,
-                "remediation": remediation,
+                "compliance_framework": sanitize_text(primary_framework, limit=512),
+                "frameworks": [sanitize_text(item, limit=512) for item in frameworks_list],
+                "description": sanitize_text(description, limit=4000),
+                "remediation": sanitize_text(remediation, limit=4000),
             })
-            rows.append((1, finding.rule_name, finding.severity, "OPEN", primary_framework, finding.filename))
+            rows.append((
+                1, sanitize_text(finding.rule_name, limit=1000), finding.severity, "OPEN",
+                primary_framework,
+                sanitize_path(finding.filename),
+                json.dumps(frameworks_list),
+                sanitize_text(description, limit=4000), sanitize_text(remediation, limit=4000),
+            ))
 
         # ── Deduplicate: remove old findings for this target, then insert fresh ─
         if rows:
@@ -452,7 +581,7 @@ async def run_iac_scan(req: IaCScanRequest, background_tasks: BackgroundTasks) -
                 initialize_database()
                 with sqlite3.connect(DB_PATH) as conn:
                     # Delete previous findings for the same target path
-                    target_filenames = {finding.filename for finding in raw_findings}
+                    target_filenames = {sanitize_path(finding.filename) for finding in raw_findings}
                     for tf in target_filenames:
                         conn.execute(
                             "DELETE FROM scan_results WHERE target_path = ?",
@@ -460,8 +589,8 @@ async def run_iac_scan(req: IaCScanRequest, background_tasks: BackgroundTasks) -
                         )
                     conn.executemany(
                         "INSERT INTO scan_results "
-                        "(target_id, vulnerability_type, severity, status, compliance_framework, target_path) "
-                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        "(target_id, vulnerability_type, severity, status, compliance_framework, target_path, compliance_frameworks, description, remediation) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         rows,
                     )
                     conn.commit()
@@ -486,7 +615,7 @@ async def run_iac_scan(req: IaCScanRequest, background_tasks: BackgroundTasks) -
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=sanitize_text(exc, limit=500))
 
 
 @app.post("/api/scan/iac/remediate")
@@ -508,11 +637,11 @@ async def remediate_iac(req: RemediationRequest) -> Dict[str, Any]:
             ],
         }
     except (RemediationError, UnicodeDecodeError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail=sanitize_text(exc, limit=500)) from exc
     except HTTPException:
         raise
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"Could not update target: {exc}") from exc
+        raise HTTPException(status_code=500, detail=f"Could not update target: {sanitize_text(exc, limit=400)}") from exc
 
 
 @app.get("/api/integrations/webhooks")
@@ -523,7 +652,7 @@ async def get_webhooks() -> Dict[str, Any]:
             webhooks = [{"id": r[0], "url": r[1], "min_severity": r[2]} for r in rows]
             return {"status": "ok", "webhooks": webhooks}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=sanitize_text(exc, limit=500))
 
 @app.post("/api/integrations/webhooks")
 async def save_webhook(req: WebhookModel) -> Dict[str, Any]:
@@ -538,7 +667,7 @@ async def save_webhook(req: WebhookModel) -> Dict[str, Any]:
             conn.commit()
         return {"status": "success", "message": "Webhook saved"}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=sanitize_text(exc, limit=500))
 
 @app.post("/api/integrations/test")
 async def test_webhook(req: WebhookTestModel, background_tasks: BackgroundTasks) -> Dict[str, Any]:
@@ -561,8 +690,19 @@ async def export_iac_sarif() -> Dict[str, Any]:
             return generate_sarif([])
             
         with sqlite3.connect(DB_PATH) as conn:
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(scan_results)")
+            }
+            mappings_column = (
+                "compliance_frameworks"
+                if "compliance_frameworks" in columns
+                else "NULL"
+            )
+            description_column = "description" if "description" in columns else "NULL"
+            remediation_column = "remediation" if "remediation" in columns else "NULL"
             rows = conn.execute(
-                "SELECT vulnerability_type, severity, compliance_framework, target_path "
+                "SELECT vulnerability_type, severity, compliance_framework, target_path, "
+                f"{mappings_column}, {description_column}, {remediation_column} "
                 "FROM scan_results WHERE status='OPEN'"
             ).fetchall()
             
@@ -572,23 +712,27 @@ async def export_iac_sarif() -> Dict[str, Any]:
             severity = row[1]
             fw = row[2]
             target_path = row[3] if len(row) > 3 and row[3] else "project-root"
-            
-            from src.scanners.compliance_mapper import get_finding_metadata
-            meta = get_finding_metadata(vuln_type)
+            try:
+                frameworks = json.loads(row[4]) if row[4] else []
+            except (TypeError, ValueError):
+                frameworks = []
+            if not frameworks and fw:
+                frameworks = [fw]
             
             findings.append({
                 "vulnerability_type": vuln_type,
                 "severity": severity,
                 "compliance_framework": fw,
-                "frameworks": meta["frameworks"],
-                "remediation": meta["remediation"],
+                "frameworks": frameworks,
+                "description": row[5] or vuln_type,
+                "remediation": row[6] or "",
                 "target": target_path,
             })
             
         sarif_report = generate_sarif(findings)
         return sarif_report
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=sanitize_text(exc, limit=500))
 
 
 @app.post("/api/report/generate")

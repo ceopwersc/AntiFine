@@ -9,6 +9,8 @@ from src.ai.knowledge_service import KnowledgeService, find_rule_for_finding
 from src.models.finding import Finding
 from src.scanners.iac_audit import analyze_terraform
 from src.services.ai_explanation import build_explanation_prompt
+from src.ai.prompts import EXPLANATION_SYSTEM_PROMPT, GENERAL_SYSTEM_PROMPT
+from src.services.ai_explanation import SYSTEM_PROMPT
 
 
 class KnowledgeServiceTests(unittest.TestCase):
@@ -56,6 +58,26 @@ class KnowledgeServiceTests(unittest.TestCase):
         finding = Finding("Unknown local rule", "LOW", "main.tf")
         prompt = build_explanation_prompt(finding, None, None)
         self.assertIn("No matching AntiFine rule metadata supplied.", prompt)
+
+    def test_compliance_prompt_is_allowlisted_and_does_not_expand_frameworks(self) -> None:
+        finding = Finding(
+            "SSH exposed to the internet",
+            "CRITICAL",
+            "main.tf",
+            frameworks=["CIS AWS Foundations Benchmark 5.2"],
+        )
+        prompt = build_explanation_prompt(finding, None, None)
+        for framework in ("PCI-DSS", "NIST", "ISO 27001", "HIPAA", "GDPR", "SOC 2"):
+            self.assertNotIn(framework, prompt)
+        for system_prompt in (SYSTEM_PROMPT, EXPLANATION_SYSTEM_PROMPT, GENERAL_SYSTEM_PROMPT):
+            self.assertIn("cross-framework", system_prompt)
+            self.assertIn("CIS", prompt)
+            self.assertIn("general guidance", system_prompt)
+
+    def test_prompt_separates_antifine_and_general_verification(self) -> None:
+        for system_prompt in (SYSTEM_PROMPT, EXPLANATION_SYSTEM_PROMPT, GENERAL_SYSTEM_PROMPT):
+            self.assertIn("AntiFine-specific verification", system_prompt)
+            self.assertIn("General security verification", system_prompt)
 
     def test_ollama_prompt_path_does_not_require_knowledge_lookup(self) -> None:
         finding = Finding("Unknown local rule", "LOW", "main.tf")
