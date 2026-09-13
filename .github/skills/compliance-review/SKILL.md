@@ -1,15 +1,40 @@
 ---
 name: compliance-review
-description: Review AntiFine compliance mappings and claims using deterministic rule metadata, exact controls, and evidence-based status.
+description: Implement and review AntiFine compliance mappings with deterministic source data, exact controls, and evidence-based status.
 ---
 
 # AntiFine compliance review
 
-Load this skill for compliance analysis, mapping changes, or compliance-related AI behavior in AntiFine. Deterministic AntiFine mappings are authoritative; general security knowledge and retrieved framework documentation must not create a new finding mapping.
+Load this skill for compliance mapping, compliance UI/reporting, compliance-related AI behavior, or tests. AntiFine is a deterministic security scanner. Existing finding metadata, deterministic scanner/rule definitions, `compliance_mapper.py`, scanner output, compliance tests, and approved AntiFine documentation are authoritative. AI suggestions are not.
 
-## Authoritative frameworks
+## Keep these concepts separate
 
-AntiFine currently maps findings to:
+Never conflate:
+
+1. **Framework mapped** — a framework is attached to a finding/rule.
+2. **Control mapped** — an exact control or requirement is attached.
+3. **Finding detected** — deterministic evidence triggered a finding.
+4. **Compliance status** — a status explicitly produced by AntiFine.
+5. **Remediation status** — whether a deterministic fix was applied and verified.
+
+A finding mapped to CIS AWS Foundations Benchmark 5.2 with status `OPEN` does not prove that the entire framework is non-compliant. A mapping does not imply `PASS` or `FAIL` unless the repository explicitly defines that status.
+
+## Source-of-truth workflow
+
+Before changing behavior, inspect:
+
+- `src/scanners/compliance_mapper.py`
+- `src/scanners/iac_audit.py`
+- `src/models/finding.py`
+- compliance tests and rule definitions
+- report and SARIF generation
+- frontend representations and AI context builders where relevant
+
+Trace the real finding metadata and scanner output. Do not assume a framework is supported or infer a mapping from general cybersecurity knowledge. Preserve actual repository semantics; do not invent `PASSED`, `FAILED`, or `UNKNOWN` statuses if they do not exist.
+
+## Supported frameworks
+
+AntiFine may include:
 
 - CIS AWS Foundations Benchmark
 - CIS Docker Benchmark
@@ -18,47 +43,92 @@ AntiFine currently maps findings to:
 - PCI-DSS 4.0
 - PSS Restricted
 
-Verify the actual framework name and exact control identifier from the finding/rule metadata. Do not normalize away meaningful version, section, or requirement details.
+Treat a framework as supported only when the repository provides evidence. Do not expand the list automatically.
 
-## Required review method
+## Mapping integrity
 
-1. Inspect `src/scanners/compliance_mapper.py` and the scanner rule that produces the finding.
-2. Trace the real `Finding` data in `src/models/finding.py` and relevant API/AI context builders.
-3. Confirm each reported framework and control is explicitly supplied by deterministic AntiFine metadata.
-4. Distinguish evidence, mapping, and status:
-   - **Mapped** means AntiFine attaches the framework/control to the finding.
-   - **Compliant/passed** requires deterministic evidence that the applicable control is satisfied.
-   - A security recommendation or general framework explanation is neither a mapping nor proof of compliance.
-5. If a framework is absent, report that AntiFine has no supplied mapping. Do not invent control numbers, control names, equivalence, or framework-specific claims.
+Where the implementation supports them, preserve the exact:
 
-## Hard rules
+- framework name and version;
+- control/requirement identifier;
+- title and description;
+- finding/rule association;
+- remediation guidance;
+- source/reference.
 
-- Never invent framework mappings.
-- Never infer cross-framework equivalence.
-- Never claim a control passed without evidence from the scanner or an authoritative verification result.
-- Never turn general security guidance or retrieved compliance documents into a finding-specific mapping.
-- Preserve exact identifiers, versions, and sections.
-- For contextual AI questions, deterministic finding metadata is the allowlist for finding-specific compliance claims.
-- Keep AI advisory. It may explain a supplied mapping, but it cannot alter severity, compliance state, or remediation state.
+Never invent control IDs, silently drop mappings, rename frameworks inconsistently, normalize away meaningful identifiers, infer from text similarity, or create frontend-only mappings.
 
-## Changing compliance logic
+Never infer cross-framework equivalence. For example, CIS AWS 5.2 does not imply PCI-DSS 1.3.1, NIST, or ISO 27001 unless AntiFine explicitly defines that mapping. General security relevance is not evidence of an AntiFine mapping.
 
-When explicitly asked to modify compliance behavior:
+A real finding may legitimately contain multiple authoritative mappings, such as:
 
-- make the smallest change in the deterministic mapper/rule metadata;
-- preserve backwards compatibility and existing `Finding` contracts;
-- update focused tests for unmapped frameworks, missing mappings, and findings with multiple framework mappings;
-- test exact control identifiers and versioned names;
-- test that generic documentation cannot create an unauthorized mapping;
-- test malformed or incomplete metadata where relevant;
-- run the relevant scanner, mapper, API, and AI compliance tests.
+```text
+CIS AWS Foundations Benchmark 5.2
+PCI-DSS 4.0 Requirement 1.3.1
+```
 
-Reference files:
+Preserve both when the actual rule metadata supplies both. Do not remove a valid mapping because a manually constructed test payload omitted it.
 
-- `src/scanners/compliance_mapper.py`
-- `src/scanners/iac_audit.py`
-- `src/models/finding.py`
-- `src/ai/context_builder.py`
-- `src/ai/retriever.py`
-- `tests/`
+## AI and UI boundaries
 
+Frontend compliance displays, dashboards, Finding Drawers, compliance views, SARIF, reports, and Ask AntiFine must derive from the same authoritative backend data. AI may explain supplied mappings, but must never add frameworks, controls, requirements, or compliance states.
+
+If a finding has only `CIS AWS Foundations Benchmark 5.2` and the user asks whether it affects PCI-DSS, the assistant must say AntiFine has no supplied PCI-DSS mapping for that finding. It must not invent a PCI-DSS control. General PCI-DSS education is allowed only when clearly labeled as general guidance and not presented as an AntiFine mapping.
+
+AntiFine must not claim “Compliant” or “Non-compliant” without deterministic evidence for that state. Prefer “Not mapped” or “Status unavailable” over guessing.
+
+## Required change workflow
+
+When explicitly changing compliance behavior:
+
+1. Inspect existing mapping behavior and authoritative source.
+2. Compare the proposed change with current semantics.
+3. Verify every exact framework/control identifier.
+4. Check missing, unknown, and false mappings.
+5. Update the smallest implementation surface.
+6. Preserve finding/status/remediation separation and backwards compatibility.
+7. Update tests and relevant documentation, reports, SARIF, and frontend representations when applicable.
+8. Run compliance tests, relevant scanner tests, report/SARIF checks, and frontend verification where affected.
+
+## Required regression coverage
+
+Test:
+
+1. one framework mapping;
+2. multiple framework mappings;
+3. missing mapping;
+4. unknown framework;
+5. control-ID preservation;
+6. framework-name/version preservation;
+7. compliance-status preservation;
+8. finding/status separation;
+9. AI explanation of supplied mappings;
+10. report output;
+11. SARIF mapping;
+12. generic security reasoning cannot create a new mapping.
+
+Include the false-mapping regression:
+
+```text
+Finding: TF-AWS-004
+Authoritative mapping: CIS AWS Foundations Benchmark 5.2
+Question: "Does this affect PCI-DSS?"
+Expected: no PCI-DSS mapping or control is generated.
+```
+
+Include a positive multi-mapping regression using a real rule whose metadata supplies both CIS AWS Foundations Benchmark 5.2 and PCI-DSS 4.0 Requirement 1.3.1; both must remain available for explanation and reporting.
+
+## Output expectations
+
+For a compliance task, report:
+
+1. authoritative mapping source;
+2. frameworks involved;
+3. exact controls involved;
+4. whether status is explicitly known;
+5. code changed;
+6. tests added;
+7. tests run and results;
+8. any ambiguity or unavailable evidence.
+
+Never fill missing compliance information with a guess. The deterministic AntiFine implementation is always authoritative.
