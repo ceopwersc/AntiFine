@@ -25,7 +25,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from database.setup import DB_PATH, initialize_database
 from src.scanners.ssrf_scanner import run_web_audit
 from src.scanners.iac_audit import run_iac_audit
-from src.scanners.remediation import RemediationError, remediate_file
+from src.scanners.remediation import RemediationError, preview_remediation, remediate_file
 from src.scanners.compliance_mapper import map_finding_to_framework, get_finding_metadata
 from src.reporting.generate import generate_report
 from src.reporting.sarif_exporter import export_to_sarif
@@ -642,6 +642,26 @@ async def remediate_iac(req: RemediationRequest) -> Dict[str, Any]:
         raise
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Could not update target: {sanitize_text(exc, limit=400)}") from exc
+
+
+@app.post("/api/scan/iac/remediation/preview")
+async def preview_iac_remediation(req: RemediationRequest) -> Dict[str, Any]:
+    """Render the exact allowlisted remediation without modifying the target."""
+    try:
+        resolved = _resolve_and_sandbox(req.target_path)
+        before, after, action = preview_remediation(resolved, req.rule_name)
+        return {
+            "target": str(resolved),
+            "action": sanitize_text(action, limit=500),
+            "before": sanitize_text(before, limit=12000),
+            "after": sanitize_text(after, limit=12000),
+        }
+    except (RemediationError, UnicodeDecodeError) as exc:
+        raise HTTPException(status_code=422, detail=sanitize_text(exc, limit=500)) from exc
+    except HTTPException:
+        raise
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Could not preview target: {sanitize_text(exc, limit=400)}") from exc
 
 
 @app.get("/api/integrations/webhooks")

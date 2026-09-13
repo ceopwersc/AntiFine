@@ -145,6 +145,18 @@ export const remediateFinding = async (target: string, ruleName: string) => {
   })).data;
 };
 
+export const previewRemediation = async (target: string, ruleName: string): Promise<{
+  target: string;
+  action: string;
+  before: string;
+  after: string;
+}> => {
+  return (await apiClient.post('/scan/iac/remediation/preview', {
+    target_path: target,
+    rule_name: ruleName,
+  })).data;
+};
+
 export const explainFinding = async (
   finding: ExplainableFinding,
   codeContext?: string,

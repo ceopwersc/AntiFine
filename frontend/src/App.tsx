@@ -39,7 +39,7 @@ import {
   Terminal,
   X,
 } from 'lucide-react';
-import { askAntiFine, explainFinding, explainRemediation, fetchAIHealth, fetchSecretFindings, generateReport, remediateFinding, runScan, type AskContext, type AskMessage, type AskResponse, type FindingExplanation, type RemediationExplanation } from './api';
+import { askAntiFine, explainFinding, explainRemediation, fetchAIHealth, fetchSecretFindings, generateReport, previewRemediation, remediateFinding, runScan, type AskContext, type AskMessage, type AskResponse, type FindingExplanation, type RemediationExplanation } from './api';
 
 type Severity = 'Critical' | 'High' | 'Medium' | 'Low';
 type Page = 'overview' | 'scan' | 'findings' | 'compliance' | 'secrets' | 'history' | 'reports' | 'ai' | 'settings';
@@ -538,7 +538,7 @@ function FindingDrawer({
   return <><motion.button className="drawer-scrim" onClick={onClose} aria-label="Close finding details" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} /><motion.aside className="detail-drawer" role="dialog" aria-modal="true" aria-label="Finding details" initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: 'spring', damping: 28, stiffness: 260 }}><div className="drawer-header"><div><span className="drawer-eyebrow">Finding <code>{finding.id}</code></span><h2>{finding.rule_name}</h2><div className="drawer-meta-line"><span>{findingTechnology(finding.file)}</span><span>{finding.file}:{finding.line}</span></div></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={19} /></button></div><div className="drawer-content"><div className="drawer-badges"><SeverityBadge severity={finding.severity} /><span className={`status-badge ${finding.status.toLowerCase()}`}><span />{finding.status}</span></div><section className="drawer-section"><h3>Detection</h3><p>{finding.description}</p></section><section className="drawer-section"><h3>Code</h3><div className="drawer-code"><div><span>{finding.file}</span><span>line {finding.line}</span></div><pre>{finding.before}</pre></div></section><section className="drawer-section"><h3>Compliance mapping</h3><div className="framework-list">{finding.frameworks.length ? finding.frameworks.map((framework) => <span key={framework} className="framework-pill">{framework}</span>) : <span className="muted">No authoritative mapping supplied</span>}</div></section><section className="drawer-section remediation-preview"><div className="section-heading-row"><h3>Deterministic remediation</h3>{deterministicFixAvailable && <button className="text-button" onClick={copy}>{copied ? <><Check size={13} />Copied</> : <><Copy size={13} />Copy</>}</button>}</div><p>{finding.remediation || 'No deterministic remediation available.'}</p>{finding.after && <pre>{finding.after}</pre>}</section><section className="drawer-section ai-explanation" aria-live="polite"><div className="section-heading-row"><div><h3>Local AI</h3><span className="ai-label">Ollama · secondary explanation</span></div>{explanation && <button className="text-button" onClick={() => void requestExplanation()} disabled={loadingAI}>{loadingAI ? 'Analyzing locally…' : 'Regenerate'}</button>}</div><p className="ai-disclaimer">AI explains the deterministic finding; it does not change the rule result or remediation.</p>{aiError ? <div className="ai-error"><strong>Local AI unavailable</strong><span>AntiFine's deterministic security analysis is still available.</span><button className="text-button" onClick={() => void requestExplanation()} disabled={loadingAI}>Retry</button></div> : explanation ? <div className="ai-response"><span className="ai-model">{explanation.model} · generated locally</span>{renderExplanation(explanation.explanation)}</div> : <button className="button button-secondary ai-explain-button" onClick={() => void requestExplanation()} disabled={loadingAI}>{loadingAI ? <><RefreshCw size={15} className="spin" />Analyzing locally…</> : <><Sparkles size={15} />Explain with Local AI</>}</button>}<button className="button button-secondary ai-ask-button" onClick={onAsk}><MessageSquareText size={14} />Ask AntiFine about this</button></section></div><div className="drawer-footer"><button className="button button-secondary" onClick={onClose}>Close</button>{deterministicFixAvailable && finding.status === 'Open' && <button className="button button-primary" onClick={onRemediate}><Sparkles size={15} />Review fix</button>}</div></motion.aside></>;
 }
 
-function RemediationModal({ finding, onClose, onApplied }: { finding: Finding; onClose: () => void; onApplied: () => void }) {
+function RemediationModal({ finding: initialFinding, onClose, onApplied }: { finding: Finding; onClose: () => void; onApplied: () => void }) {
   const [applying, setApplying] = useState(false);
   const [applied, setApplied] = useState(false);
   const [remediationError, setRemediationError] = useState('');
@@ -546,6 +546,16 @@ function RemediationModal({ finding, onClose, onApplied }: { finding: Finding; o
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewError, setReviewError] = useState('');
   const [verification, setVerification] = useState<{ backup?: string; findings_count?: number } | null>(null);
+  const [preview, setPreview] = useState<{ before: string; after: string } | null>(null);
+  const [previewError, setPreviewError] = useState('');
+  const finding = preview ? { ...initialFinding, ...preview } : initialFinding;
+  useEffect(() => {
+    let active = true;
+    void previewRemediation(initialFinding.file, initialFinding.rule_name)
+      .then((result) => { if (active) setPreview({ before: result.before, after: result.after }); })
+      .catch((error: any) => { if (active) setPreviewError(error?.response?.data?.detail || 'Deterministic preview unavailable.'); });
+    return () => { active = false; };
+  }, [initialFinding.file, initialFinding.rule_name]);
   const apply = async () => {
     setApplying(true);
     setRemediationError('');
@@ -553,8 +563,13 @@ function RemediationModal({ finding, onClose, onApplied }: { finding: Finding; o
       const result = await remediateFinding(finding.file, finding.rule_name);
       setVerification(result);
       if (result.findings_count === 0) {
-        setApplied(true);
-        onApplied();
+        const rescan = await runScan(finding.file, 'IaC Config Audit');
+        if (rescan.findings_count === 0) {
+          setApplied(true);
+          onApplied();
+        } else {
+          setRemediationError(`Verification rescan failed: ${rescan.findings_count} finding${rescan.findings_count === 1 ? '' : 's'} remain open. The finding was not marked remediated.`);
+        }
       } else {
         setRemediationError(`Verification failed: ${result.findings_count} finding${result.findings_count === 1 ? '' : 's'} remain open. The finding was not marked remediated.`);
       }

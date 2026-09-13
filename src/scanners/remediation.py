@@ -29,12 +29,8 @@ def _replace_once(content: str, pattern: str, replacement: str, action: str) -> 
     return updated, action
 
 
-def remediate_file(path: Path, rule_name: str) -> RemediationResult:
-    """Apply a narrowly scoped fix and preserve the original as ``.bak``."""
-    if not path.is_file():
-        raise RemediationError(f"Remediation target is not a file: {path}")
-
-    original = path.read_text(encoding="utf-8")
+def _build_remediation(original: str, rule_name: str) -> tuple[str, str]:
+    """Return one allowlisted deterministic transformation without writing."""
     lowered = rule_name.lower()
     updated = original
     action = ""
@@ -96,6 +92,22 @@ def remediate_file(path: Path, rule_name: str) -> RemediationResult:
 
     if updated == original:
         raise RemediationError("The remediation produced no file change")
+
+    return updated, action
+
+
+def preview_remediation(path: Path, rule_name: str) -> tuple[str, str, str]:
+    """Return the exact allowlisted before/after content without modifying a file."""
+    if not path.is_file():
+        raise RemediationError(f"Remediation target is not a file: {path}")
+    original = path.read_text(encoding="utf-8")
+    updated, action = _build_remediation(original, rule_name)
+    return original, updated, action
+
+
+def remediate_file(path: Path, rule_name: str) -> RemediationResult:
+    """Apply a narrowly scoped fix and preserve the original as ``.bak``."""
+    original, updated, action = preview_remediation(path, rule_name)
 
     backup = path.with_name(path.name + ".bak")
     shutil.copy2(path, backup)
