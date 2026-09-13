@@ -17,6 +17,7 @@ import {
   FileCheck2,
   FileCode2,
   FileText,
+  FilePlus2,
   GitBranch,
   KeyRound,
   LayoutDashboard,
@@ -33,6 +34,7 @@ import {
   Sparkles,
   Send,
   Trash2,
+  Upload,
   WifiOff,
   Terminal,
   X,
@@ -312,20 +314,68 @@ function Overview({ findings, onNavigate, onSelect }: { findings: Finding[]; onN
   </div>;
 }
 
-function ScanWorkspace({ onComplete, target, setTarget }: { onComplete: (findings: Finding[]) => void; target: string; setTarget: (target: string) => void }) {
+type ScanQueueItem = {
+  id: string;
+  name: string;
+  size: number;
+  type: 'Terraform' | 'Kubernetes' | 'Docker' | 'Unknown';
+  status: 'Added' | 'Ready' | 'Error';
+  error?: string;
+};
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function queuedFileType(name: string): ScanQueueItem['type'] {
+  if (name.endsWith('.tf')) return 'Terraform';
+  if (name.endsWith('.yaml') || name.endsWith('.yml')) return 'Kubernetes';
+  if (name.toLowerCase() === 'dockerfile' || name.toLowerCase().includes('dockerfile')) return 'Docker';
+  return 'Unknown';
+}
+
+function ScanWorkspace({ onComplete, target, setTarget, onViewFindings, onOpenFinding }: { onComplete: (findings: Finding[]) => void; target: string; setTarget: (target: string) => void; onViewFindings: () => void; onOpenFinding: (finding: Finding) => void }) {
   const [scanType, setScanType] = useState('IaC Config Audit');
   const [scanning, setScanning] = useState(false);
-  const [scanLog, setScanLog] = useState<string[]>(['Ready to scan. Select a target and audit protocol.']);
+  const [scanLog, setScanLog] = useState<string[]>(['Ready. Add a server-local file path to begin.']);
   const [done, setDone] = useState(false);
   const [error, setError] = useState('');
+  const [queue, setQueue] = useState<ScanQueueItem[]>([]);
+  const [dragActive, setDragActive] = useState(false);
+  const [scanResult, setScanResult] = useState<{ findings: Finding[]; durationMs: number; target: string } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const addFiles = (files: FileList | File[]) => {
+    const additions = Array.from(files).map((file) => {
+      const type = queuedFileType(file.name);
+      return {
+        id: `${file.name}-${file.size}-${file.lastModified}`,
+        name: file.name,
+        size: file.size,
+        type,
+        status: type === 'Unknown' ? 'Error' as const : 'Ready' as const,
+        error: type === 'Unknown' ? 'Unsupported file type' : undefined,
+      };
+    });
+    setQueue((current) => [...current, ...additions.filter((item) => !current.some((existing) => existing.id === item.id))]);
+    const firstValid = additions.find((item) => item.status === 'Ready');
+    if (firstValid && queue.length === 0) setTarget(firstValid.name);
+    setError('');
+  };
+  const validQueue = queue.filter((item) => item.status === 'Ready');
+  const removeFile = (id: string) => setQueue((current) => current.filter((item) => item.id !== id));
+  const clearQueue = () => { setQueue([]); setScanResult(null); setDone(false); };
   const startScan = async () => {
-    if (!target.trim()) return;
-    setScanning(true); setDone(false); setError('');
-    setScanLog(['Initializing secure scan context…', `Target: ${target}`, `Protocol: ${scanType}`, 'Analyzing configuration files…']);
+    if (!target.trim() || validQueue.length === 0 || scanning) return;
+    setScanning(true); setDone(false); setError(''); setScanResult(null);
+    const startedAt = performance.now();
+    setScanLog(['Initializing local scan context…', `Target: ${target.trim()}`, `Protocol: ${scanType}`, 'Parsing configuration…']);
     try {
       const result = await runScan(target.trim(), scanType);
       const returned = Array.isArray(result?.findings) ? result.findings : [];
-      if (returned.length) onComplete(returned.map((item: Partial<Finding>, index: number) => {
+      const durationMs = Math.round(performance.now() - startedAt);
+      const mappedFindings = returned.map((item: Partial<Finding>, index: number) => {
         return {
           ...item,
           id: item.id ?? `AF-${1100 + index}`,
@@ -340,17 +390,19 @@ function ScanWorkspace({ onComplete, target, setTarget }: { onComplete: (finding
           after: item.after ?? '',
           status: item.status ?? 'Open',
           detected: item.detected ?? 'just now',
-        };
-      }));
-      else onComplete([]);
-      setScanLog((current) => [...current, 'Policy checks complete.', `Scan complete · ${returned.length} findings`]); setDone(true);
+        } as Finding;
+      });
+      onComplete(mappedFindings);
+      setScanResult({ findings: mappedFindings, durationMs, target: result?.target ?? target.trim() });
+      setScanLog((current) => [...current, 'Rules evaluated.', 'Compliance mappings resolved.', `Scan complete · ${returned.length} findings`]);
+      setDone(true);
     } catch (requestError: any) {
       const detail = requestError?.response?.data?.detail;
       setError(detail || 'The scan backend could not complete this request.');
       setScanLog((current) => [...current, 'Scan failed · no findings were loaded.']);
     } finally { setScanning(false); }
   };
-  return <div className="content-stack"><PageHeader eyebrow="Security workspace" title="Run a scan" description="Inspect infrastructure-as-code and web assets before they reach production." /><div className="scan-layout"><section className="panel scan-config"><div className="panel-heading"><div><h2>Scan configuration</h2><p>Define the scope and policy set for this run.</p></div><div className="secure-label"><ShieldCheck size={14} /> Secure</div></div><label className="field-label" htmlFor="target">Target path or URL</label><div className="input-with-icon"><FileCode2 size={17} /><input id="target" value={target} onChange={(event) => setTarget(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void startScan(); }} placeholder="e.g. infra/production.tf" /></div><div className="target-suggestions"><button onClick={() => setTarget('infra/production.tf')}>infra/production.tf</button><button onClick={() => setTarget('deployments/worker.yaml')}>deployments/worker.yaml</button><button onClick={() => setTarget('services/api/Dockerfile')}>Dockerfile</button></div><label className="field-label" htmlFor="protocol">Audit protocol</label><div className="select-wrap"><Radar size={17} /><select id="protocol" value={scanType} onChange={(event) => setScanType(event.target.value)}><option>IaC Config Audit</option><option>SSRF Web Audit</option></select><ChevronDown size={15} /></div><div className="scan-options"><div><strong>Policy packs</strong><span>CIS Benchmarks, NIST, SOC 2</span></div><div className="toggle on"><span /></div></div><div className="scan-options"><div><strong>Secret detection</strong><span>High-confidence patterns + entropy</span></div><div className="toggle on"><span /></div></div><button className="button button-primary scan-button" onClick={() => void startScan()} disabled={scanning || !target.trim()}>{scanning ? <><RefreshCw size={16} className="spin" />Scanning target…</> : <><Play size={16} fill="currentColor" />Initialize scan</>}</button>{error && <div className="inline-error"><AlertTriangle size={15} />{error}</div>}</section><section className={`panel terminal-panel ${scanning ? 'terminal-active' : ''}`}><div className="terminal-header"><span><span className="terminal-dot red" /><span className="terminal-dot yellow" /><span className="terminal-dot green" /></span><span className="terminal-title"><Terminal size={14} /> scan output</span><span className="terminal-live">{scanning ? 'LIVE' : done ? 'COMPLETE' : 'IDLE'}</span></div><div className="terminal-body">{scanLog.map((line, index) => <div key={`${line}-${index}`} className={line.includes('complete') || line.includes('findings') ? 'terminal-success' : index === scanLog.length - 1 && scanning ? 'terminal-current' : ''}><span className="terminal-prefix">{index === scanLog.length - 1 && scanning ? '›' : '✓'}</span>{line}</div>)}{scanning && <div className="terminal-cursor">▌</div>}</div><div className="terminal-footer"><span><Activity size={14} /> Engine v2.4.1</span><span>Run ID: {done ? 'scan_8f31c2' : '—'}</span></div></section></div><div className="scan-trust-row"><ShieldCheck size={17} /><span>Scans are read-only by default.</span><span className="muted">Any remediation is explicit, deterministic, and reviewable before applying.</span></div></div>;
+  return <div className="content-stack scan-workspace"><PageHeader eyebrow="Local security engine" title="New security scan" description="Analyze infrastructure locally before deployment." /><div className="scan-layout"><section className="panel scan-config"><div className="panel-heading"><div><h2>Files</h2><p>Server-local paths are scanned read-only by FastAPI.</p></div><div className="secure-label"><ShieldCheck size={14} /> Local</div></div><div className={`drop-zone ${dragActive ? 'drop-zone-active' : ''}`} onDragOver={(event) => { event.preventDefault(); setDragActive(true); }} onDragLeave={() => setDragActive(false)} onDrop={(event) => { event.preventDefault(); setDragActive(false); addFiles(event.dataTransfer.files); }}><Upload size={18} /><strong>Drop files here</strong><span>or</span><button type="button" className="button button-secondary" onClick={() => fileInputRef.current?.click()}><FilePlus2 size={14} />Choose files</button><small>Supported: .tf · .yaml · .yml · Dockerfile</small><input ref={fileInputRef} type="file" multiple accept=".tf,.yaml,.yml,Dockerfile" hidden onChange={(event) => { if (event.target.files) addFiles(event.target.files); event.currentTarget.value = ''; }} /></div><div className="queue-heading"><span>Scan queue <strong>{queue.length}</strong></span>{queue.length > 0 && <button type="button" className="text-button" onClick={clearQueue}>Clear all</button>}</div><div className="scan-queue">{queue.length === 0 ? <div className="queue-empty">No files queued.</div> : queue.map((file) => <div className={`queue-row ${file.status === 'Error' ? 'queue-error' : ''}`} key={file.id}><FileCode2 size={15} /><div><strong>{file.name}</strong><span>{file.type} · {formatFileSize(file.size)}</span></div><span className={`queue-status ${file.status.toLowerCase()}`}>{file.status}</span>{file.error && <span className="queue-error-text">{file.error}</span>}<button type="button" className="icon-button small" aria-label={`Remove ${file.name}`} onClick={() => removeFile(file.id)}><X size={14} /></button></div>)}</div><label className="field-label" htmlFor="target">Server-local target path</label><div className="input-with-icon"><FileCode2 size={17} /><input id="target" value={target} onChange={(event) => setTarget(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void startScan(); }} placeholder="e.g. infra/production.tf" /></div><label className="field-label" htmlFor="protocol">Scan protocol</label><div className="select-wrap"><Radar size={17} /><select id="protocol" value={scanType} onChange={(event) => setScanType(event.target.value)}><option>IaC Config Audit</option><option>SSRF Web Audit</option></select><ChevronDown size={15} /></div><div className="scan-summary"><span>Files <strong>{validQueue.length}</strong></span><span>Technologies <strong>{Array.from(new Set(validQueue.map((item) => item.type))).join(' · ') || '—'}</strong></span><span>Rules <strong>Backend reported</strong></span></div><button className="button button-primary scan-button" onClick={() => void startScan()} disabled={scanning || !target.trim() || validQueue.length === 0}>{scanning ? <><RefreshCw size={16} className="spin" />Scanning…</> : <><Play size={16} fill="currentColor" />Run scan</>}</button>{error && <div className="inline-error"><AlertTriangle size={15} />{error}</div>}</section><section className={`panel terminal-panel ${scanning ? 'terminal-active' : ''}`}><div className="terminal-header"><span><span className="terminal-dot red" /><span className="terminal-dot yellow" /><span className="terminal-dot green" /></span><span className="terminal-title"><Terminal size={14} /> scan output</span><span className="terminal-live">{scanning ? 'LIVE' : done ? 'COMPLETE' : 'IDLE'}</span></div><div className="terminal-body">{scanLog.map((line, index) => <div key={`${line}-${index}`} className={line.includes('complete') || line.includes('findings') ? 'terminal-success' : index === scanLog.length - 1 && scanning ? 'terminal-current' : ''}><span className="terminal-prefix">{index === scanLog.length - 1 && scanning ? '›' : '✓'}</span>{line}</div>)}{scanning && <div className="terminal-cursor">▌</div>}{scanResult && <><div className="scan-completion"><div><span className="section-kicker">SCAN COMPLETE</span><strong>{scanResult.findings.length} findings</strong><span>{scanResult.target}</span><span>{scanResult.durationMs} ms · rules evaluated by backend</span></div><div className="completion-actions"><button type="button" className="button button-primary" onClick={onViewFindings}>View findings</button><button type="button" className="button button-secondary" onClick={() => { setDone(false); setScanResult(null); }}>Run again</button></div></div><div className="scan-output-findings">{scanResult.findings.slice(0, 5).map((finding) => <button type="button" key={finding.id} onClick={() => onOpenFinding(finding)}><SeverityBadge severity={finding.severity} /><code>{finding.id}</code><span>{finding.rule_name}</span><span>{finding.file}:{finding.line}</span><ChevronRight size={13} /></button>)}</div></>}</div><div className="terminal-footer"><span><Activity size={14} /> FastAPI · 127.0.0.1:8000</span><span>Read-only scan</span></div></section></div><div className="scan-trust-row"><ShieldCheck size={17} /><span>Local security engine</span><span className="muted">Deterministic scanner · no file mutation</span></div></div>;
 }
 
 function FindingsPage({ findings, onSelect }: { findings: Finding[]; onSelect: (finding: Finding) => void }) {
@@ -715,5 +767,5 @@ export default function App() {
   };
   const completeScan = (nextFindings: Finding[]) => { setFindings(nextFindings); setPage('findings'); };
   const markApplied = () => { if (remediationFinding) setFindings((current) => current.map((item) => item.id === remediationFinding.id ? { ...item, status: 'Fixed' } : item)); };
-  return <AppShell page={page} setPage={(nextPage) => { if (nextPage !== 'ai') { setAssistantContext(undefined); setAssistantQuestion(''); } setPage(nextPage); }}><AnimatePresence mode="wait"><motion.div key={page} className="page-transition" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.16 }}>{page === 'overview' && <Overview findings={findings} onNavigate={setPage} onSelect={selectFinding} />}{page === 'scan' && <ScanWorkspace onComplete={completeScan} target={target} setTarget={setTarget} />}{page === 'findings' && <FindingsPage findings={findings} onSelect={selectFinding} />}{page === 'compliance' && <CompliancePage />}{page === 'secrets' && <SecretsPage />}{page === 'history' && <HistoryPage />}{page === 'reports' && <ReportsPage />}{page === 'ai' && <AskAntiFinePage context={assistantContext} initialQuestion={assistantQuestion} onClearContext={() => { setAssistantContext(undefined); setAssistantQuestion(''); }} onNewChat={() => { setAssistantContext(undefined); setAssistantQuestion(''); }} />}{page === 'settings' && <SettingsPage onNavigate={setPage} />}</motion.div></AnimatePresence><AnimatePresence>{selectedFinding && !remediationFinding && <FindingDrawer finding={selectedFinding} onClose={() => setSelectedFinding(null)} onRemediate={() => setRemediationFinding(selectedFinding)} onAsk={() => askAboutFinding(selectedFinding)} explanationCache={explanationCache} onExplanation={(id, result) => setExplanationCache((current) => ({ ...current, [id]: result }))} />}{remediationFinding && <RemediationModal finding={remediationFinding} onClose={() => setRemediationFinding(null)} onApplied={markApplied} />}</AnimatePresence></AppShell>;
+  return <AppShell page={page} setPage={(nextPage) => { if (nextPage !== 'ai') { setAssistantContext(undefined); setAssistantQuestion(''); } setPage(nextPage); }}><AnimatePresence mode="wait"><motion.div key={page} className="page-transition" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.16 }}>{page === 'overview' && <Overview findings={findings} onNavigate={setPage} onSelect={selectFinding} />}{page === 'scan' && <ScanWorkspace onComplete={completeScan} onViewFindings={() => setPage('findings')} onOpenFinding={selectFinding} target={target} setTarget={setTarget} />}{page === 'findings' && <FindingsPage findings={findings} onSelect={selectFinding} />}{page === 'compliance' && <CompliancePage />}{page === 'secrets' && <SecretsPage />}{page === 'history' && <HistoryPage />}{page === 'reports' && <ReportsPage />}{page === 'ai' && <AskAntiFinePage context={assistantContext} initialQuestion={assistantQuestion} onClearContext={() => { setAssistantContext(undefined); setAssistantQuestion(''); }} onNewChat={() => { setAssistantContext(undefined); setAssistantQuestion(''); }} />}{page === 'settings' && <SettingsPage onNavigate={setPage} />}</motion.div></AnimatePresence><AnimatePresence>{selectedFinding && !remediationFinding && <FindingDrawer finding={selectedFinding} onClose={() => setSelectedFinding(null)} onRemediate={() => setRemediationFinding(selectedFinding)} onAsk={() => askAboutFinding(selectedFinding)} explanationCache={explanationCache} onExplanation={(id, result) => setExplanationCache((current) => ({ ...current, [id]: result }))} />}{remediationFinding && <RemediationModal finding={remediationFinding} onClose={() => setRemediationFinding(null)} onApplied={markApplied} />}</AnimatePresence></AppShell>;
 }
