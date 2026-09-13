@@ -1,104 +1,153 @@
 # AntiFine
 
-**AntiFine** is a modern, automated Security, Compliance, and Infrastructure-as-Code (IaC) auditing framework. It acts as a defensive guardrail for development teams by statically analyzing infrastructure configurations, enforcing strict security postures, and preventing critical misconfigurations or secrets from ever reaching production.
+**Local security engineering for infrastructure-as-code.**
 
-It is designed to be deeply integrated into CI/CD pipelines (acting as an automated deployment gate) while also providing a rich API and dashboard for historical compliance tracking.
+AntiFine scans Terraform, Dockerfiles, and Kubernetes YAML before deployment, maps deterministic findings to supported compliance frameworks, and gives engineers a reviewable path from **finding → code → remediation → rescan**.
 
----
+Everything important stays local:
 
-## Core Capabilities
+```text
+FastAPI · 127.0.0.1:8000    React/Vite · 127.0.0.1:5173    Ollama · optional
+```
 
-### 1. Advanced Infrastructure Auditing
-AntiFine includes highly specialized scanners tailored for modern cloud-native environments:
-* **Kubernetes (PSS Enforcement)**: It structurally parses multi-document Kubernetes YAML manifests and strictly enforces the **Pod Security Standards (PSS) Restricted Profile**. It flags critical violations like containers running in privileged mode, host namespace sharing (`hostPID`/`hostNetwork`), missing read-only root filesystems, dangerous Linux capabilities (`CAP_SYS_ADMIN`), missing `runAsNonRoot`, and privilege escalation.
-* **Docker / Container Security**: It features **multi-stage build awareness**. It understands the difference between build-time compilation environments and the final runtime image—intelligently allowing `USER root` for package installations in early stages, but strictly forbidding it in the final production container layer. It also enforces health checks and image pinning.
-* **Secret Detection Engine**: It scans configuration files (`.env`, `.json`, `.conf`, and Kubernetes YAMLs) for hardcoded credentials. It combines high-confidence vendor regexes (AWS, GitHub, Slack) with a highly tuned, character-set adjusted **Shannon Entropy filter** to drastically reduce false positives (intelligently ignoring things like Git SHAs or UUIDs).
-* **Terraform Security**: Uses native HCL parsing (`python-hcl2`) to deeply inspect Terraform (`.tf`) ASTs for insecure AWS configurations (e.g. open ingress ports, unencrypted databases, missing S3 encryption/PABs) and embedded secrets.
-* **SSRF Auditing**: Capable of auditing web targets for Server-Side Request Forgery vulnerabilities.
+> AntiFine is deterministic first. The scanner decides what was found, its severity, and its compliance metadata. Local AI can explain an existing finding, but it cannot create findings, change severity, modify files, or approve a fix.
 
-### 2. Automated CI/CD Gating & Integration
-* **Headless CLI Gate**: AntiFine is built to run headlessly in CI/CD environments (like GitHub Actions). By running a command like `python -m src.cli.gate --fail-on HIGH`, AntiFine acts as a strict deployment gate, instantly breaking the build if any configuration violates the required severity threshold.
-* **SARIF Export**: It natively translates findings into the **OASIS SARIF v2.1.0** standard, injecting full compliance framework tags and drop-in remediation blocks into the payload for seamless integration with native GitHub Security Code Scanning alerts.
-* **SOC Dispatching**: It supports webhook integrations to instantly dispatch critical security alerts to a Security Operations Center (SOC) or incident response channel.
+## What AntiFine does
 
-### 3. Compliance Mapping & Remediation
-AntiFine doesn't just throw errors—it contextualizes them.
-* Every finding is automatically mapped against industry-standard frameworks such as the **CIS Benchmarks**, **NIST SP 800-190**, and **PCI-DSS**.
-* It acts as a knowledge base, attaching direct, actionable **drop-in remediation** code snippets to every alert so developers know exactly how to fix the issue without needing to become security experts.
+| Surface | Coverage |
+| --- | --- |
+| **Terraform** | Public SSH/RDP and permissive ingress, public databases, S3 encryption, S3 public-access blocks, and public exposure |
+| **Dockerfiles** | Root/final-stage user checks, image pinning, `HEALTHCHECK`, secrets in `ENV`, and multi-stage build awareness |
+| **Kubernetes** | Privileged containers, host namespaces, non-root execution, writable root filesystems, resource limits, capabilities, and PSS Restricted |
+| **Secrets** | High-confidence AWS, GitHub, Slack, private-key, credential, and entropy-based detection with redaction |
+| **Compliance** | CIS AWS Foundations, CIS Docker, CIS Kubernetes, NIST SP 800-190, PCI-DSS 4.0, and PSS Restricted |
+| **Remediation** | Small allowlisted Terraform, Dockerfile, and Kubernetes transformations with backup-first writes and deterministic rescan verification |
+| **Delivery** | FastAPI endpoints, React workstation UI, CLI gating, SARIF export, reports, and optional webhooks |
 
-### 4. System Architecture
-* **The Engine**: A heavily decoupled Python 3 backend using FastAPI to expose scanning, analytics, and reporting capabilities via a REST API.
-* **The Interface**: A modern React/Vite frontend acting as an **Interactive Remediation Workspace**, featuring on-demand scanning, real-time KPI severity filtering, SARIF exporting, and a dynamic slide-over drawer for actionable code remediation.
-* **The Storage**: A localized SQLite database for fast, private, and persistent audit logging and historical trend analysis.
+## The engineering workflow
 
----
+```text
+Scan
+  ↓
+Finding
+  ↓
+Finding Drawer → Code / Rule / Compliance
+  ↓
+Review deterministic fix
+  ↓
+Diff → Apply → Backup → Rescan
+  ↓
+Verified only when no finding remains
+```
 
-## Installation
+The UI is intentionally dense: rule IDs, file paths, line numbers, code context, framework mappings, deterministic diffs, scan output, and operational state take priority over decorative analytics.
 
-### Prerequisites
-- **Python 3.10+**
-- **Node.js 18+** (for frontend UI)
+## Quick start
 
-### Backend Setup
+### Requirements
+
+- Python 3.10+
+- Node.js 18+
+- Optional: [Ollama](https://ollama.com/) for local explanations and Ask AntiFine
+
+### Install
+
 ```bash
-# Clone the repository
 git clone https://github.com/ceopwersc/AntiFine.git
 cd AntiFine
 
-# Create and activate a virtual environment
 python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+# macOS/Linux
+source .venv/bin/activate
+# Windows PowerShell
+# .venv\Scripts\Activate.ps1
 
-# Install dependencies
 pip install -r requirements.txt
-```
 
-### Frontend Setup
-```bash
 cd frontend
 npm install
+cd ..
 ```
 
----
+### Run the local workspace
 
-## Usage
+Start the backend from the repository root:
 
-### Headless CI/CD Gate
-To scan a specific file or directory and block a build pipeline:
+```bash
+python -m uvicorn src.api.server:app --host 127.0.0.1 --port 8000
+```
+
+In a second terminal:
+
+```bash
+cd frontend
+npm run dev -- --host 127.0.0.1 --port 5173
+```
+
+Open:
+
+- UI: <http://127.0.0.1:5173>
+- API docs: <http://127.0.0.1:8000/docs>
+- AI health: <http://127.0.0.1:8000/api/ai/health>
+
+The scanner API accepts a **server-local path**. A path must resolve inside AntiFine's backend project root; the API does not treat a browser upload as a remote file-write mechanism.
+
+## Scan from the CLI
+
+Use the headless gate in CI or pre-deployment checks:
+
 ```bash
 python -m src.cli.gate --file path/to/target --fail-on HIGH
 ```
-You can also supply a `--min-score` to fail the build if the weighted compliance score drops below a certain threshold.
 
-### Running the API Server
-Start the FastAPI backend to use the UI or API endpoints:
+The gate exits non-zero when the configured severity threshold is met. Use the CLI against a file or directory supported by the deterministic IaC scanner.
+
+## Scan through the API
+
+Terraform, Dockerfile, and Kubernetes scanning uses the existing `/api/scan/iac` contract:
+
 ```bash
-python src/api/server.py
+curl -X POST http://127.0.0.1:8000/api/scan/iac \
+  -H "Content-Type: application/json" \
+  -d '{"target_path":"path/to/infrastructure.tf"}'
 ```
-The API will be available at `http://localhost:8000/docs`.
 
-### Running the Frontend UI
-To start the React dashboard in development mode:
-```bash
-cd frontend
-npm run dev
+The response contains the scan status, resolved target, finding count, normalized findings, frameworks, descriptions, and remediation guidance. Findings are persisted locally for the existing reporting and dashboard workflows.
+
+## Deterministic remediation
+
+The only file-writing path is the deterministic remediation engine:
+
+```text
+POST /api/scan/iac/remediate
 ```
-Visit `http://localhost:5173` to see compliance dashboards, run scans, and generate reports.
 
-### Deterministic remediation
-The dashboard can apply supported fixes from the finding drawer through
-`POST /api/scan/iac/remediate`. The endpoint is restricted to project-relative
-files, creates a sibling `<filename>.bak` backup before writing, rejects
-unsupported rules, and re-scans the file before returning the remaining
-findings. It currently supports safe Dockerfile USER/HEALTHCHECK fixes,
-Kubernetes privilege flags, and Terraform `publicly_accessible = false`.
+It:
 
-### Optional local Ollama integration
-AntiFine works normally without Ollama. The optional AI integration only
-provides a direct local text-generation test endpoint; it is not used by
-scanning, secret detection, compliance mapping, remediation, or CI gates.
+1. resolves and sandboxes the target path;
+2. rejects unsupported rules or unsafe targets;
+3. creates `<target>.bak` before writing;
+4. applies a narrow allowlisted transformation;
+5. rescans the target;
+6. returns the backup path, action, remaining finding count, and remaining findings.
 
-Configure it with environment variables:
+The frontend marks a finding **Fixed** only when the verification response reports `findings_count == 0`. A successful HTTP response by itself is not proof of remediation.
+
+## Compliance model
+
+AntiFine separates three concepts:
+
+- **Observed evidence** — what the deterministic scanner found in the source.
+- **Authoritative mapping** — frameworks and controls explicitly attached by AntiFine rule metadata.
+- **Compliance status** — whether deterministic evidence supports a control as satisfied.
+
+A framework mentioned by a user or found in general documentation does not create a finding mapping. If a requested framework is absent from the authoritative metadata, AntiFine reports that no supplied mapping is available rather than inventing a control or cross-framework equivalence.
+
+## Optional local AI
+
+Ollama is optional and is not part of scanning, compliance mapping, remediation, or CI gating.
+
+Create a local `.env` from `.env.example`, or set process environment variables:
 
 ```bash
 OLLAMA_ENABLED=true
@@ -107,95 +156,40 @@ OLLAMA_MODEL=qwen2.5:7b
 OLLAMA_TIMEOUT=30
 ```
 
-AntiFine reads these values from the process environment using its existing
-`os.getenv` configuration pattern. For local development, `src/services/ollama_service.py`
-loads the project-root `.env` file with `python-dotenv`; explicit process
-environment variables take precedence. The repository includes `.env.example`
-as a template, and `.env` is ignored by Git. On Windows PowerShell, you can
-also set the values before starting FastAPI:
-
-```powershell
-$env:OLLAMA_ENABLED = "true"
-$env:OLLAMA_BASE_URL = "http://127.0.0.1:11434"
-$env:OLLAMA_MODEL = "qwen2.5:7b"
-$env:OLLAMA_TIMEOUT = "30"
-```
-
-Start Ollama and pull the default model:
+Then:
 
 ```bash
 ollama serve
 ollama pull qwen2.5:7b
 ```
 
-Check the integration without exposing credentials:
+Check availability without exposing credentials:
 
 ```bash
 curl http://127.0.0.1:8000/api/ai/health
+
 curl -X POST http://127.0.0.1:8000/api/ai/test \
   -H "Content-Type: application/json" \
-  -d "{\"prompt\":\"Explain Terraform in one sentence.\"}"
+  -d '{"prompt":"Explain Terraform in one sentence."}'
 ```
-
-`GET /api/ai/health` reports whether the configured model is available.
-`POST /api/ai/test` rejects empty prompts and returns a clean error if the
-integration is disabled or Ollama cannot be reached.
 
 ### Finding explanations
-The first AI-assisted workflow accepts an existing deterministic `Finding`
-and asks Ollama for a concise developer explanation. It does not detect new
-issues, change severity or compliance mappings, edit files, or apply fixes.
-Secret-like values are redacted and code context is bounded before it is sent
-to the local model:
 
-```powershell
-$body = @{
-  finding = @{
-    rule_name = "Open Ingress Port (22-22) to 0.0.0.0/0 in main.tf"
-    severity = "CRITICAL"
-    filename = "main.tf"
-    frameworks = @("CIS AWS Foundations Benchmark 5.2")
-    remediation = "Restrict ingress cidr_blocks to trusted CIDRs."
-    description = "SSH is exposed to the public internet."
-  }
-  code_context = 'cidr_blocks = ["0.0.0.0/0"]'
-} | ConvertTo-Json
-Invoke-RestMethod -Uri http://127.0.0.1:8000/api/ai/findings/explain `
-  -Method Post -ContentType "application/json" -Body $body
+The finding explanation workflow accepts an existing deterministic finding. It does not detect new issues, change severity or compliance, edit files, or apply remediation. Secret-like values are redacted and code context is bounded before local generation.
+
+The React finding drawer exposes this as **Explain with Local AI**. Results are advisory, session-scoped, and separate from the deterministic finding state.
+
+### Ask AntiFine and local retrieval
+
+Ask AntiFine uses bounded conversation history and deterministic lexical retrieval over the local rule catalog and `docs/ai/`. It does not use hosted RAG, a cloud API, embeddings, or a vector database.
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/ai/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question":"How does AntiFine detect high entropy secrets?"}'
 ```
 
-The React finding drawer also exposes this workflow through **Explain with
-Local AI** and presents the result as an **AI Security Explanation**. The explanation is cached for the current frontend session and is
-shown below the deterministic finding details; retry and regenerate actions do
-not alter the finding or its remediation state.
-
-### AntiFine knowledge base
-The explanation prompt also receives deterministic context from
-`src/ai/knowledge/rules.json`, looked up by
-`src/ai/knowledge_service.py`. Human-readable source notes live under
-`docs/ai/` for the scan workflow, Terraform, Docker, Kubernetes, secrets,
-compliance, and remediation behavior. This is a local rule catalog; it does
-not add embeddings, a vector database, or autonomous behavior. The separate
-Ask AntiFine workflow uses bounded lexical retrieval over this local content.
-
-### Local retrieval-assisted AI
-AntiFine now retrieves relevant local rules and `docs/ai/` documentation before
-calling Ollama. Retrieval uses a cached, rebuildable lexical index; no
-embedding model, cloud API, hosted vector database, or internet connection is
-required. The index is generated at `.antifine/knowledge_index.json` and is
-ignored by Git.
-
-Ask a general AntiFine question:
-
-```powershell
-$body = @{ question = "How does AntiFine detect high entropy secrets?" } | ConvertTo-Json
-Invoke-RestMethod -Uri http://127.0.0.1:8000/api/ai/ask `
-  -Method Post -ContentType "application/json" -Body $body
-```
-
-Structured context is also supported for finding-aware questions. The
-`source` must be one of `finding`, `scan`, `dashboard`, `compliance`,
-`remediation`, or `general`:
+Finding-aware questions can include structured context:
 
 ```json
 {
@@ -212,28 +206,91 @@ Structured context is also supported for finding-aware questions. The
       "frameworks": ["CIS AWS Foundations Benchmark 5.2"],
       "status": "open"
     }
-  }
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": "Why is this finding critical?"
+    },
+    {
+      "role": "assistant",
+      "content": "The deterministic scanner found public SSH ingress..."
+    }
+  ]
 }
 ```
 
-Older clients may continue sending a plain string in `context`; it is
-sanitized and treated as general context.
+Conversation history is request-supplied, bounded, and not persisted as permanent memory. Rebuild the local knowledge index after changing AI documentation:
 
-Rebuild the local index explicitly after changing the knowledge documents:
-
-```powershell
+```bash
 python -m src.cli.ai rebuild-index
 ```
-Deterministic fixes require a finding from a scan of a file that exists under
-the backend project root. Preview/demo findings in the frontend may reference
-example paths that are not present locally; AntiFine reports that remediation
-error and does not mark the finding as fixed.
 
-### GUI Testing
-To run the Desktop CustomTkinter interface (Optional):
+## Reports and integrations
+
+- SARIF export for GitHub Code Scanning and CI ingestion
+- Markdown report generation
+- Local SQLite scan history
+- Optional webhook dispatch for configured severity thresholds
+- Optional CustomTkinter desktop entry point:
+
+  ```bash
+  pip install -r requirements-gui.txt
+  python src/main.py --gui
+  ```
+
+## Development validation
+
+Backend tests:
+
 ```bash
-pip install -r requirements-gui.txt
-python src/main.py --gui
+python -m pytest -q
 ```
 
----
+Frontend build and lint:
+
+```bash
+cd frontend
+npm run build
+npm run lint
+```
+
+UI functionality is verified with Playwright against the running local services. Critical coverage includes:
+
+```text
+Scan → Finding → Drawer → Review Fix → Diff → Apply → Rescan → Verified
+Finding → Ask AntiFine → Ollama → explanation
+Compliance → related finding → remediation
+```
+
+Use temporary fixtures without real secrets. Collect console errors and failed network requests, and verify resulting state rather than only checking that controls render.
+
+## Project boundaries
+
+AntiFine intentionally does **not**:
+
+- send infrastructure secrets to hosted services;
+- let Ollama modify files or execute commands;
+- use AI to decide findings, severity, compliance, or remediation success;
+- claim compliance from general security relevance;
+- persist permanent AI conversation memory;
+- replace deterministic scanner rules with model guesses.
+
+## Repository map
+
+```text
+src/api/                 FastAPI routes and API contracts
+src/scanners/            Deterministic IaC, secret, and remediation logic
+src/models/finding.py    Shared finding model
+src/ai/                  Local retrieval and constrained prompt context
+src/services/            Ollama and explanation services
+src/cli/                 CI gate and knowledge-index commands
+frontend/                React/Vite local security workstation
+docs/ai/                 Local AntiFine knowledge documentation
+tests/                   Focused backend and AI regression tests
+.github/skills/          Project guidance for security and E2E work
+```
+
+## License
+
+See the repository license file for terms.
