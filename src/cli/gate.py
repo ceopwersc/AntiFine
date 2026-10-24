@@ -80,7 +80,7 @@ def main():
                 score -= 1
                 
         score = max(0, score)
-        print(f"Compliance Score: {score}/100 (Threshold: {args.min_score})")
+        print(f"Risk heuristic (not compliance certification): {score}/100 (Threshold: {args.min_score})")
         if score < args.min_score:
             print(f"{COLORS['HIGH']}[FAIL] Score {score} is below minimum {args.min_score}.{COLORS['RESET']}")
             failed = True
@@ -89,7 +89,7 @@ def main():
         print(f"\n{COLORS['HIGH']}[FAIL] Target failed compliance gate policy (threshold: {args.fail_on}).{COLORS['RESET']}")
         sys.exit(1)
     else:
-        print(f"\n{COLORS['GREEN']}[PASS] Target meets compliance gate policy.{COLORS['RESET']}")
+        print(f"\n{COLORS['GREEN']}[PASS] Evaluated files meet the configured severity gate; no compliance certification is inferred.{COLORS['RESET']}")
         sys.exit(0)
 
 if __name__ == "__main__":

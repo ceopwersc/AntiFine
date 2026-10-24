@@ -10,7 +10,11 @@ from __future__ import annotations
 import re
 import sqlite3
 import sys
+import json
 import yaml
+from src.scanners.structures import yaml_documents, validate_graph, terraform_attribute
+from src.services.filesystem import read_source, MAX_FILE_BYTES
+from contextlib import closing
 from pathlib import Path
 
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
@@ -19,7 +23,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from database.setup import DB_PATH, initialize_database  # noqa: E402
 from src.models.finding import Finding  # noqa: E402
+from src.scanners.compliance_mapper import get_finding_metadata  # noqa: E402
 from src.scanners.secret_scanner import scan_value_for_secrets  # noqa: E402
+from src.services.secret_boundary import sanitize_path, sanitize_text  # noqa: E402
 
 
 class IaCScannerError(RuntimeError):
@@ -134,17 +140,22 @@ def analyze_dockerfile(content: str, filename: str) -> list[Finding]:
         stage_label = stage.label
         has_user = False
         has_healthcheck = False
+        user_lines = [i for text, i in zip(stage.lines, stage.line_indices) if text.upper().startswith("USER ")]
 
         for line, global_idx in zip(stage.lines, stage.line_indices):
             upper = line.upper()
+            if upper.startswith("FROM "):
+                has_healthcheck = False
 
             # ── USER directive ────────────────────────────────────────────
             if upper.startswith("USER "):
                 has_user = True
                 user = line.split(" ", 1)[1].strip().lower()
-                if user in ("root", "0"):
+                if user.split(":", 1)[0] in ("root", "0") and global_idx == user_lines[-1]:
                     if stage.is_final:
                         findings.append(Finding(
+                                            resource=f"docker/{stage.index}/{global_idx + 1}", line=global_idx + 1,
+                                            rule_id='docker.root-user',
                             rule_name=f"Insecure Configuration (USER root) in {filename}",
                             severity="HIGH",
                             filename=filename,
@@ -153,6 +164,8 @@ def analyze_dockerfile(content: str, filename: str) -> list[Finding]:
                         ))
                     else:
                         findings.append(Finding(
+                                            resource=f"docker/{stage.index}/{global_idx + 1}", line=global_idx + 1,
+                                            rule_id='docker.builder-root',
                             rule_name=(
                                 f"Informational: USER root in intermediate build stage "
                                 f"({stage_label}) in {filename} "
@@ -166,7 +179,7 @@ def analyze_dockerfile(content: str, filename: str) -> list[Finding]:
 
             # ── HEALTHCHECK directive ─────────────────────────────────────
             elif upper.startswith("HEALTHCHECK "):
-                has_healthcheck = True
+                has_healthcheck = upper.split(None, 1)[1].strip() != "NONE"
 
             # ── ENV / ARG secret detection (keyword name + entropy) ───────
             elif upper.startswith("ENV ") or upper.startswith("ARG "):
@@ -184,10 +197,14 @@ def analyze_dockerfile(content: str, filename: str) -> list[Finding]:
                 # Stage 1 -- Deep scan (Vendor exact match or Entropy)
                 ef = scan_value_for_secrets(val, key, filename)
                 if ef:
+                    ef.resource = f"docker/{stage.index}/{global_idx}"
+                    ef.line = global_idx + 1
                     findings.append(ef)
                 # Stage 2 -- Fallback keyword name match (CRITICAL, any stage)
                 elif _SECRET_ENV_PATTERN.match(line):
                     findings.append(Finding(
+                                        resource=f"docker/{stage.index}/{global_idx + 1}", line=global_idx + 1,
+                                        rule_id='secrets.docker-env',
                         rule_name=f"Hardcoded Secret in ENV Instruction in {filename}",
                         severity="CRITICAL",
                         filename=filename,
@@ -197,17 +214,20 @@ def analyze_dockerfile(content: str, filename: str) -> list[Finding]:
 
             # ── FROM unpinned image (applies to every stage) ──────────────
             elif upper.startswith("FROM "):
-                m = _UNPINNED_FROM_PATTERN.match(line)
+                normalized_from = re.sub(r"^FROM\s+(?:--\S+\s+)*", "FROM ", line, flags=re.I)
+                m = _UNPINNED_FROM_PATTERN.match(normalized_from)
                 if m:
                     tag = (m.group("tag") or "").lower()
                     image = m.group("image").lower()
-                    if image not in ("scratch",) and not upper.startswith("FROM --"):
+                    if image not in ("scratch",) and "@sha256:" not in line:
                         if tag in ("latest", ""):
                             stage_ctx = (
                                 " [final stage]" if stage.is_final
                                 else f" [{stage_label}]"
                             )
                             findings.append(Finding(
+                                                resource=f"docker/{stage.index}/{global_idx + 1}", line=global_idx + 1,
+                                                rule_id='docker.unpinned-image',
                                 rule_name=(
                                     f"Unpinned Image Tag (latest or missing) in "
                                     f"{filename}{stage_ctx}"
@@ -222,6 +242,8 @@ def analyze_dockerfile(content: str, filename: str) -> list[Finding]:
         if stage.is_final:
             if not has_user:
                 findings.append(Finding(
+                                    resource=f"docker/{stage.index}/{stage.line_indices[0] + 1}", line=stage.line_indices[0] + 1,
+                                    rule_id='docker.missing-user',
                     rule_name=f"Insecure Configuration (Missing USER) in {filename}",
                     severity="MEDIUM",
                     filename=filename,
@@ -230,6 +252,8 @@ def analyze_dockerfile(content: str, filename: str) -> list[Finding]:
                 ))
             if not has_healthcheck:
                 findings.append(Finding(
+                                    resource=f"docker/{stage.index}/{stage.line_indices[0] + 1}", line=stage.line_indices[0] + 1,
+                                    rule_id='docker.missing-healthcheck',
                     rule_name=f"Insecure Configuration (Missing HEALTHCHECK) in {filename}",
                     severity="LOW",
                     filename=filename,
@@ -238,6 +262,8 @@ def analyze_dockerfile(content: str, filename: str) -> list[Finding]:
                 ))
         elif multi_stage and not has_user:
             findings.append(Finding(
+                                resource=f"docker/{stage.index}/{stage.line_indices[0] + 1}", line=stage.line_indices[0] + 1,
+                                rule_id='docker.builder-default-root',
                 rule_name=(
                     f"Informational: No USER directive in intermediate build stage "
                     f"({stage_label}) in {filename} "
@@ -259,169 +285,34 @@ _DANGEROUS_CAPS = {"SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE", "NET_RAW", "SYS_MODUL
 
 
 def _walk_yaml_strings(obj: object, filename: str) -> list[Finding]:
-    """Recursively walk a parsed YAML structure and scan string values for secrets."""
-    findings: list[Finding] = []
-    if isinstance(obj, dict):
-        for key, val in obj.items():
-            if isinstance(val, str):
-                ef = scan_value_for_secrets(val, str(key), filename)
-                if ef:
-                    findings.append(ef)
+    validate_graph(obj)
+    findings = []
+    seen = set()
+    def visit(value, key="value", pointer="value"):
+        if isinstance(value, (dict, list)):
+            if id(value) in seen:
+                return
+            seen.add(id(value))
+            if isinstance(value, dict):
+                for index, (k, v) in enumerate(value.items()):
+                    visit(v, str(k), f"{pointer}/{index}")
             else:
-                findings.extend(_walk_yaml_strings(val, filename))
-    elif isinstance(obj, list):
-        for item in obj:
-            findings.extend(_walk_yaml_strings(item, filename))
+                for index, v in enumerate(value):
+                    visit(v, key, f"{pointer}/{index}")
+        elif isinstance(value, str):
+            finding = scan_value_for_secrets(value, key, filename)
+            if finding:
+                finding.resource = pointer
+                findings.append(finding)
+    visit(obj)
     return findings
+
 
 
 def analyze_kubernetes(content: str, filename: str) -> list[Finding]:
-    """Scan Kubernetes YAML manifests against Pod Security Standards (PSS Restricted) and CIS Benchmarks."""
-    findings: list[Finding] = []
+    from src.scanners.kubernetes_rules import analyze
+    return analyze(content, filename)
 
-    try:
-        documents = list(yaml.safe_load_all(content))
-    except yaml.YAMLError as exc:
-        findings.append(Finding(
-            rule_name=f"YAML Parse Error in {filename}",
-            severity="CRITICAL",
-            filename=filename,
-            frameworks=["Internal"],
-            remediation="Fix the YAML syntax before scanning.",
-            description=str(exc),
-        ))
-        return findings
-
-    for doc in documents:
-        if not isinstance(doc, dict):
-            continue
-
-        # Scan all string values in the document for embedded secrets
-        findings.extend(_walk_yaml_strings(doc, filename))
-
-        # Extract pod spec from standalone Pods or workload controllers
-        spec = None
-        if doc.get("kind") == "Pod":
-            spec = doc.get("spec", {})
-        elif "spec" in doc and isinstance(doc["spec"], dict):
-            template = doc["spec"].get("template", {})
-            if isinstance(template, dict):
-                spec = template.get("spec", {})
-
-        if not spec or not isinstance(spec, dict):
-            continue
-
-        # 1. Host Namespace Inspection (CRITICAL)
-        host_flags = [k for k in ["hostPID", "hostIPC", "hostNetwork"] if spec.get(k) is True]
-        if host_flags:
-            findings.append(Finding(
-                rule_name=f"Host Namespace Exposure ({', '.join(host_flags)}) in {filename}",
-                severity="CRITICAL",
-                filename=filename,
-                frameworks=["CIS Kubernetes 5.2.2", "NIST SP 800-190 Section 3.3.1"],
-                remediation="Remove hostPID, hostIPC, and hostNetwork flags from pod spec.",
-            ))
-
-        # Collect all container types for PSS checks
-        all_containers: list[dict] = []
-        for container_key in ("containers", "initContainers", "ephemeralContainers"):
-            raw = spec.get(container_key, [])
-            if isinstance(raw, list):
-                all_containers.extend(c for c in raw if isinstance(c, dict))
-
-        for container in all_containers:
-            c_name = container.get("name", "unnamed")
-            sec_ctx = container.get("securityContext") or {}
-
-            # 2. Privileged Execution (CRITICAL)
-            if sec_ctx.get("privileged") is True:
-                findings.append(Finding(
-                    rule_name=f"Privileged Container ({c_name}) in {filename}",
-                    severity="CRITICAL",
-                    filename=filename,
-                    frameworks=["CIS Kubernetes 5.2.1", "PCI-DSS 4.0 Req 2.2.4"],
-                    remediation="securityContext:\n  privileged: false\n  allowPrivilegeEscalation: false",
-                ))
-
-            # 3. allowPrivilegeEscalation (HIGH)
-            if sec_ctx.get("allowPrivilegeEscalation") is not False:
-                findings.append(Finding(
-                    rule_name=f"Privilege Escalation Allowed ({c_name}) in {filename}",
-                    severity="HIGH",
-                    filename=filename,
-                    frameworks=["CIS Kubernetes 5.2.5", "PSS Restricted"],
-                    remediation="securityContext:\n  allowPrivilegeEscalation: false",
-                ))
-
-            # 4. runAsNonRoot (HIGH)
-            if sec_ctx.get("runAsNonRoot") is not True:
-                findings.append(Finding(
-                    rule_name=f"Container May Run As Root ({c_name}) in {filename}",
-                    severity="HIGH",
-                    filename=filename,
-                    frameworks=["CIS Kubernetes 5.2.6", "PSS Restricted"],
-                    remediation="securityContext:\n  runAsNonRoot: true\n  runAsUser: 1000",
-                ))
-
-            # 5. Read-Only Root Filesystem (MEDIUM)
-            if sec_ctx.get("readOnlyRootFilesystem") is not True:
-                findings.append(Finding(
-                    rule_name=f"Writable Root Filesystem ({c_name}) in {filename}",
-                    severity="MEDIUM",
-                    filename=filename,
-                    frameworks=["CIS Kubernetes 5.2.6", "NIST SP 800-190 Section 3.3.4"],
-                    remediation="securityContext:\n  readOnlyRootFilesystem: true",
-                ))
-
-            # 6. Capabilities Drop ALL (HIGH)
-            caps = sec_ctx.get("capabilities") or {}
-            dropped = caps.get("drop") or []
-            if "ALL" not in [d.upper() for d in dropped if isinstance(d, str)]:
-                findings.append(Finding(
-                    rule_name=f"Insecure Capabilities (Missing drop ALL for {c_name}) in {filename}",
-                    severity="HIGH",
-                    filename=filename,
-                    frameworks=["CIS Kubernetes 5.2.7", "PSS Restricted"],
-                    remediation="securityContext:\n  capabilities:\n    drop:\n      - ALL",
-                ))
-
-            # 7. Dangerous capability additions (HIGH)
-            added = caps.get("add") or []
-            dangerous_added = [c.upper() for c in added if isinstance(c, str) and c.upper() in _DANGEROUS_CAPS]
-            if dangerous_added:
-                findings.append(Finding(
-                    rule_name=f"Dangerous Capabilities Added ({', '.join(dangerous_added)} for {c_name}) in {filename}",
-                    severity="HIGH",
-                    filename=filename,
-                    frameworks=["CIS Kubernetes 5.2.7", "PSS Restricted"],
-                    remediation="Remove dangerous capabilities from securityContext.capabilities.add.",
-                ))
-
-            # 8. Seccomp Profile (MEDIUM)
-            seccomp = sec_ctx.get("seccompProfile") or {}
-            seccomp_type = seccomp.get("type", "")
-            if seccomp_type not in ("RuntimeDefault", "Localhost"):
-                findings.append(Finding(
-                    rule_name=f"Missing Seccomp Profile ({c_name}) in {filename}",
-                    severity="MEDIUM",
-                    filename=filename,
-                    frameworks=["PSS Restricted", "CIS Kubernetes 5.7.2"],
-                    remediation="securityContext:\n  seccompProfile:\n    type: RuntimeDefault",
-                ))
-
-            # 9. Resource Limits (MEDIUM)
-            resources = container.get("resources") or {}
-            limits = resources.get("limits") or {}
-            if not limits.get("cpu") or not limits.get("memory"):
-                findings.append(Finding(
-                    rule_name=f"Missing Resource Limits ({c_name}) in {filename}",
-                    severity="MEDIUM",
-                    filename=filename,
-                    frameworks=["NIST SP 800-190 Section 3.3.4", "CIS Kubernetes 5.2.8"],
-                    remediation="resources:\n  limits:\n    cpu: '500m'\n    memory: '512Mi'",
-                ))
-
-    return findings
 
 
 # ── Terraform analysis ───────────────────────────────────────────────────────
@@ -435,12 +326,13 @@ def analyze_terraform(content: str, filename: str) -> list[Finding]:
         doc = hcl2.loads(content)
     except Exception as exc:
         findings.append(Finding(
-            rule_name=f"HCL Parse Error in {filename}",
+                            rule_id='parser.hcl',
+            rule_name=f"HCL Parse Error in {sanitize_path(filename)}",
             severity="CRITICAL",
             filename=filename,
             frameworks=["Internal"],
             remediation="Fix the HCL syntax before scanning.",
-            description=str(exc),
+            description=sanitize_text(exc, limit=2000),
         ))
         return findings
 
@@ -453,10 +345,12 @@ def analyze_terraform(content: str, filename: str) -> list[Finding]:
     sse_configs = []
     pab_configs = []
     
+    resource_index = -1
     for res_dict in resources:
         for res_type_raw, instances in res_dict.items():
             res_type = res_type_raw.strip('"\'')
             for res_name_raw, res_config in instances.items():
+                resource_index += 1
                 res_name = res_name_raw.strip('"\'')
                 
                 if res_type == "aws_s3_bucket":
@@ -479,7 +373,7 @@ def analyze_terraform(content: str, filename: str) -> list[Finding]:
                             ingress_rules.append(ig)
                     
                     for rule in ingress_rules:
-                        cidrs = rule.get("cidr_blocks", [])
+                        cidrs = list(rule.get("cidr_blocks", []) or []) + list(rule.get("ipv6_cidr_blocks", []) or [])
                         cidrs_str = str(cidrs).replace('"', '').replace("'", "")
                         if "0.0.0.0/0" in cidrs_str or "::/0" in cidrs_str:
                             from_port = rule.get("from_port")
@@ -492,8 +386,10 @@ def analyze_terraform(content: str, filename: str) -> list[Finding]:
                                 continue
                                 
                             if fp is not None and tp is not None:
-                                if (fp <= 22 <= tp) or (fp <= 3389 <= tp):
+                                protocol = str(rule.get("protocol", "tcp")).strip('"\'').lower()
+                                if protocol in ("-1", "all") or (protocol in ("tcp", "6") and ((fp <= 22 <= tp) or (fp <= 3389 <= tp))):
                                     findings.append(Finding(
+                                                        rule_id='terraform.open-ingress',
                                         rule_name=f"Open Ingress Port ({fp}-{tp}) to 0.0.0.0/0 in {filename}",
                                         severity="CRITICAL",
                                         filename=filename,
@@ -505,6 +401,10 @@ def analyze_terraform(content: str, filename: str) -> list[Finding]:
                 if res_type == "aws_db_instance":
                     if str(res_config.get("publicly_accessible", "")).lower() == "true":
                         findings.append(Finding(
+                                            rule_id='terraform.public-database',
+                            resource=f'terraform/{resource_index}',
+                            line=terraform_attribute(content, f'terraform/{resource_index}', 'publicly_accessible')[2],
+                            remediation_eligible=True,
                             rule_name=f"Publicly Accessible Database ({res_name}) in {filename}",
                             severity="CRITICAL",
                             filename=filename,
@@ -518,12 +418,13 @@ def analyze_terraform(content: str, filename: str) -> list[Finding]:
         has_companion_sse = False
         for sse_name, sse_config in sse_configs:
             bucket_ref = str(sse_config.get("bucket", ""))
-            if b_name in bucket_ref:
+            if bucket_ref.strip('"') in (f"${{aws_s3_bucket.{b_name}.id}}", f"${{aws_s3_bucket.{b_name}.bucket}}", f"aws_s3_bucket.{b_name}.id", f"aws_s3_bucket.{b_name}.bucket"):
                 has_companion_sse = True
                 break
                 
         if not (has_embedded_sse or has_companion_sse):
             findings.append(Finding(
+                                rule_id='terraform.s3-encryption',
                 rule_name=f"Unencrypted S3 Storage ({b_name}) in {filename}",
                 severity="HIGH",
                 filename=filename,
@@ -534,12 +435,13 @@ def analyze_terraform(content: str, filename: str) -> list[Finding]:
         has_pab = False
         for pab_name, pab_config in pab_configs:
             bucket_ref = str(pab_config.get("bucket", ""))
-            if b_name in bucket_ref:
+            if bucket_ref.strip('"') in (f"${{aws_s3_bucket.{b_name}.id}}", f"${{aws_s3_bucket.{b_name}.bucket}}", f"aws_s3_bucket.{b_name}.id", f"aws_s3_bucket.{b_name}.bucket"):
                 has_pab = True
                 break
                 
         if not has_pab:
             findings.append(Finding(
+                                rule_id='terraform.s3-public-access',
                 rule_name=f"S3 Public Access Block Missing ({b_name}) in {filename}",
                 severity="HIGH",
                 filename=filename,
@@ -553,50 +455,61 @@ def analyze_terraform(content: str, filename: str) -> list[Finding]:
 # ── Generic Secrets analysis ──────────────────────────────────────────────────
 
 def analyze_generic_secrets(content: str, filename: str) -> list[Finding]:
-    """Scan generic configuration files (.env, .json, .conf) for secrets."""
-    findings: list[Finding] = []
-
-    # Match common KV structures: key=value, "key": "value", key: value
-    _generic_kv = re.compile(r'^\s*["\']?([\w.-]+)["\']?\s*[:=]\s*["\']?([^"\']+ )["\']?\s*,?$')
-
-    for raw_line in content.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith(("#", "//")):
+    if len(content.encode("utf-8")) > MAX_FILE_BYTES:
+        raise IaCScannerError("Configuration exceeds size quota")
+    if filename.lower().endswith(".json"):
+        try:
+            return _walk_yaml_strings(json.loads(content), filename)
+        except (ValueError, RecursionError):
+            return [Finding("JSON Parse Error", "CRITICAL", filename, frameworks=["Internal"], rule_id="parser.json")]
+    findings = []
+    assignment = re.compile(r"^\s*(?:export\s+)?([\w.-]+)\s*[:=]\s*(.*)$")
+    for number, raw in enumerate(content.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith(("#", ";", "//")):
             continue
-
-        m = _generic_kv.match(line)
-        if m:
-            key, val = m.group(1), m.group(2).strip()
-            ef = scan_value_for_secrets(val, key, filename)
-            if ef:
-                findings.append(ef)
-
+        match = assignment.match(line)
+        if match:
+            key, value = match.groups()
+            if value.startswith(('\"', "'")):
+                quote = value[0]
+                end = value.find(quote, 1)
+                if end == -1:
+                    return [Finding("Configuration Parse Error", "CRITICAL", filename, frameworks=["Internal"], rule_id="parser.config")]
+                value = value[1:end]
+            else:
+                value = re.split(r"\s+(?:#|;|//)", value, maxsplit=1)[0].strip()
+            finding = scan_value_for_secrets(value, key, filename)
+            if finding:
+                finding.line = number
+                finding.resource = f"assignment/{number}"
+                findings.append(finding)
+    # Vendor detection also covers standalone tokens/private-key blocks.
+    if not findings:
+        from src.scanners.secret_scanner import vendor_findings
+        findings.extend(vendor_findings(content, filename))
     return findings
+
 
 
 # ── File dispatcher ──────────────────────────────────────────────────────────
 
 def scan_file(filepath: Path) -> list[Finding]:
     """Scan a single file based on its name/extension."""
+    data = read_source(filepath.parent, filepath)
     try:
-        content = filepath.read_text(encoding="utf-8")
+        content = data.decode("utf-8-sig")
     except UnicodeDecodeError:
-        try:
-            content = filepath.read_text(encoding="utf-16")
-        except UnicodeDecodeError:
-            content = filepath.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
-        print(f"[warning] Could not read {filepath}: {exc}", file=sys.stderr)
-        return []
+        raise IaCScannerError("Source must be UTF-8 text") from None
 
-    filename = filepath.name
-    if "Dockerfile" in filename:
+    filename = sanitize_path(filepath.name)
+    if "dockerfile" in filename.lower():
         return analyze_dockerfile(content, filename)
-    elif filename.endswith((".yaml", ".yml")):
+    elif filename.lower().endswith((".yaml", ".yml")):
         return analyze_kubernetes(content, filename)
-    elif filename.endswith(".tf"):
+    elif filename.lower().endswith(".tf"):
         return analyze_terraform(content, filename)
-    elif filename.endswith((".env", ".json", ".conf")) or filename.startswith(".env"):
+    elif filename.lower().endswith((".env", ".json", ".conf")) or filename.startswith(".env"):
         return analyze_generic_secrets(content, filename)
 
     return []
@@ -604,60 +517,15 @@ def scan_file(filepath: Path) -> list[Finding]:
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
-def run_iac_audit(
-    target_path: str,
-    db_path: Path = DB_PATH,
-    target_id: int = 1,
-    persist: bool = True,
-) -> list[Finding]:
-    """Run the IaC audit against a file or directory.
-
-    Returns a list of Finding objects.
-    """
-    path = Path(target_path)
-    if not path.exists():
-        raise IaCScannerError(f"Target path does not exist: {target_path}")
-
-    all_findings: list[Finding] = []
-
-    if path.is_file():
-        all_findings.extend(scan_file(path))
-    elif path.is_dir():
-        for filepath in path.rglob("*"):
-            # Skip excluded directories
-            if any(part in _EXCLUDED_DIRS for part in filepath.parts):
-                continue
-            if filepath.is_file() and (
-                "Dockerfile" in filepath.name
-                or filepath.name.endswith((".yaml", ".yml", ".tf", ".env", ".json", ".conf"))
-                or filepath.name.startswith(".env")
-            ):
-                all_findings.extend(scan_file(filepath))
-
-    if persist and all_findings:
-        rows = []
-        for finding in all_findings:
-            rows.append((
-                target_id,
-                finding.rule_name,
-                finding.severity,
-                "OPEN",
-                finding.filename,
-            ))
-
-        try:
-            initialize_database(db_path)
-            with sqlite3.connect(db_path) as connection:
-                connection.executemany(
-                    "INSERT INTO scan_results "
-                    "(target_id, vulnerability_type, severity, status, target_path) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    rows,
-                )
-                connection.commit()
-        except (sqlite3.Error, OSError) as exc:
-            raise IaCScannerError(
-                f"Could not write findings to {db_path}: {exc}"
-            ) from exc
-
-    return all_findings
+def run_iac_audit(target_path: str, db_path: Path = DB_PATH, target_id: int = 1, persist: bool = True) -> list[Finding]:
+    from src.services.scanning import scan_target, identity
+    from src.services.scan_repository import ScanRepository
+    path = Path(target_path).absolute()
+    root = path if path.is_dir() else path.parent
+    try:
+        run, findings = scan_target(root, path, "cli-" + identity(str(root)), ScanRepository(db_path) if persist else None)
+    except (ValueError, OSError) as exc:
+        raise IaCScannerError("Target could not be evaluated safely") from exc
+    if run["status"] != "completed" or not run["coverage"]:
+        raise IaCScannerError("Scan incomplete or unsupported; no security-gate pass is available")
+    return findings

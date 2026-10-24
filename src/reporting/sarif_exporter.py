@@ -7,12 +7,13 @@ from __future__ import annotations
 
 import json
 import sys
-import hashlib
+from urllib.parse import quote
 from typing import Any
 from pathlib import Path
 
 from database.setup import DB_PATH
 from src.reporting.generate import fetch_scan_results, ReportError
+from src.services.secret_boundary import sanitize_path, sanitize_text
 
 SARIF_LEVEL_MAP = {
     "CRITICAL": "error",
@@ -31,45 +32,31 @@ def export_to_sarif(output_file: str, db_path: Path = DB_PATH) -> int:
         print(f"[error] {exc}", file=sys.stderr)
         return 1
         
-    results = []
-    for record in records:
-        level = SARIF_LEVEL_MAP.get(record.normalized_severity, "note")
-        results.append({
-            "ruleId": f"AF-TARGET-{record.target_id}",
-            "message": {
-                "text": record.vulnerability_type
-            },
-            "level": level
-        })
-        
-    sarif_data = {
-        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
-        "version": "2.1.0",
-        "runs": [
-            {
-                "tool": {
-                    "driver": {
-                        "name": "AntiFine",
-                        "informationUri": "https://github.com/ceopwersc/AntiFine",
-                        "version": "1.0.0"
-                    }
-                },
-                "results": results
-            }
-        ]
-    }
+    sarif_data = generate_sarif([
+        {
+            "vulnerability_type": record.vulnerability_type,
+            "severity": record.normalized_severity,
+            "frameworks": list(record.frameworks),
+            "description": record.description_text,
+            "remediation": record.remediation,
+            "target": record.target_path,
+            "rule_id": record.rule_id, "id": record.finding_id, "line": record.source_line, "column": record.source_column,
+            "end_line": record.end_line, "scan_id": record.scan_id, "resource": record.resource,
+        }
+        for record in records
+    ])
     
     try:
         out_path = Path(output_file)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(sarif_data, indent=2), encoding="utf-8")
-        print(f"[ok] Wrote {len(results)} finding(s) to SARIF report at {output_file}")
+        print(f"[ok] Wrote {len(records)} finding(s) to SARIF report at {output_file}")
         return 0
     except OSError as exc:
         print(f"[error] Could not write SARIF report to {output_file}: {exc}", file=sys.stderr)
         return 1
 
-def generate_sarif(findings: list[dict[str, Any]]) -> dict[str, Any]:
+def generate_sarif(findings: list[dict[str, Any]], *, coverage: list | None = None) -> dict[str, Any]:
     """Generate a SARIF JSON object conforming to OASIS SARIF v2.1.0."""
     rules = []
     results = []
@@ -85,20 +72,23 @@ def generate_sarif(findings: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
     for finding in findings:
-        vuln_type = finding.get("vulnerability_type", "Unknown Vulnerability")
+        vuln_type = sanitize_text(finding.get("vulnerability_type", "Unknown Vulnerability"), limit=1000)
         severity = finding.get("severity", "LOW").upper()
         level = severity_map.get(severity, "note")
-        frameworks = finding.get("frameworks", [])
-        remediation = finding.get("remediation", "")
+        frameworks = finding.get("frameworks")
+        if frameworks is None:
+            frameworks = finding.get("compliance_frameworks", [])
+        frameworks = [sanitize_text(v) for v in frameworks or []]
+        remediation = sanitize_text(finding.get("remediation", ""), limit=4000)
+        description = sanitize_text(finding.get("description") or vuln_type, limit=4000)
         
         # Generate a stable rule ID based on the vulnerability type hash
-        rule_hash = hashlib.md5(vuln_type.encode('utf-8')).hexdigest()[:6]
-        rule_id = f"AF-IAC-{rule_hash.upper()}"
+        rule_id = finding.get("rule_id") or "legacy.unknown"
         
         if rule_id not in seen_rules:
             rules.append({
                 "id": rule_id,
-                "shortDescription": {"text": vuln_type},
+                "shortDescription": {"text": description},
                 "defaultConfiguration": {"level": level},
                 "properties": {
                     "frameworks": frameworks,
@@ -107,28 +97,31 @@ def generate_sarif(findings: list[dict[str, Any]]) -> dict[str, Any]:
             })
             seen_rules.add(rule_id)
             
-        target = finding.get("target", "project-root")
+        target = sanitize_path(finding.get("target", "project-root"))
         
         results.append({
             "ruleId": rule_id,
-            "message": {"text": vuln_type},
+            "message": {"text": description},
             "level": level,
             "locations": [
                 {
                     "physicalLocation": {
                         "artifactLocation": {
-                            "uri": target
-                        }
+                            "uri": quote(target.replace("\\", "/"), safe="/:")
+                        },
+                        "region": {"startLine": max(1, finding.get("line", 1)), "startColumn": max(1, finding.get("column", 1)), "endLine": max(finding.get("line", 1), finding.get("end_line", 1))}
                     }
                 }
             ],
             "properties": {
-                "remediation": remediation
+                "frameworks": frameworks,
+                "remediation": remediation,
+                "finding_id": finding.get("id", ""), "scan_id": finding.get("scan_id", ""), "resource": finding.get("resource", "unknown")
             }
         })
 
     return {
-        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
         "version": "2.1.0",
         "runs": [
             {
@@ -139,7 +132,8 @@ def generate_sarif(findings: list[dict[str, Any]]) -> dict[str, Any]:
                         "rules": rules
                     }
                 },
-                "results": results
+                "results": results,
+                "properties": {"scan_coverage": coverage or [], "compliance_status": "Not evaluated"}
             }
         ]
     }

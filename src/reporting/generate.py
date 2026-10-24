@@ -14,6 +14,8 @@ from __future__ import annotations
 import re
 import sqlite3
 import sys
+import json
+from contextlib import closing
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -24,13 +26,13 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from database.setup import DB_PATH  # noqa: E402
-from src.reporting.knowledge_base import get_remediation  # noqa: E402
+from src.services.secret_boundary import sanitize_path, sanitize_text  # noqa: E402
 
 REPORT_PATH: Path = PROJECT_ROOT / "compliance_report.md"
 
 #: Presentation order for severity sections. Anything unrecognized is
 #: collected under UNCLASSIFIED so no finding is ever dropped from a report.
-SEVERITY_ORDER: tuple[str, ...] = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO")
+SEVERITY_ORDER: tuple[str, ...] = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFORMATIONAL", "INFO")
 UNCLASSIFIED: str = "UNCLASSIFIED"
 
 SEVERITY_BADGE: dict[str, str] = {
@@ -39,6 +41,7 @@ SEVERITY_BADGE: dict[str, str] = {
     "MEDIUM": "🟡",
     "LOW": "🔵",
     "INFO": "⚪",
+    "INFORMATIONAL": "⚪",
     UNCLASSIFIED: "⚫",
 }
 
@@ -108,6 +111,22 @@ class ScanRecord:
     severity: str
     status: str
     timestamp: str
+    frameworks: tuple[str, ...] = ()
+    description_text: str = ""
+    remediation_text: str = ""
+    rule_id: str = "legacy.unknown"
+    finding_id: str = ""
+    target_path: str = "unknown"
+    source_line: int = 1
+    source_column: int = 1
+    end_line: int = 1
+    scan_id: str = ""
+    resource: str = "unknown"
+
+    @property
+    def compliance_frameworks(self) -> list[str]:
+        """Authoritative mappings, never inferred from vulnerability text."""
+        return list(self.frameworks)
 
     @property
     def normalized_severity(self) -> str:
@@ -124,6 +143,8 @@ class ScanRecord:
     @property
     def remediation(self) -> str:
         """Recommended remediation for this finding."""
+        if self.remediation_text:
+            return self.remediation_text
         port = self.port
         if port is not None and port in REMEDIATION_BY_PORT:
             return REMEDIATION_BY_PORT[port]
@@ -131,43 +152,38 @@ class ScanRecord:
 
 
 def fetch_scan_results(db_path: Path = DB_PATH) -> list[ScanRecord]:
-    """Load every row from ``scan_results``.
-
-    Args:
-        db_path: SQLite database to read.
-
-    Returns:
-        All recorded findings, newest first.
-
-    Raises:
-        ReportError: If the database is missing or unreadable.
-    """
     if not db_path.is_file():
-        raise ReportError(
-            f"Database not found at {db_path}. Run '--init' and an audit first."
-        )
-
+        raise ReportError("Database unavailable")
     try:
-        with sqlite3.connect(db_path) as connection:
+        with closing(sqlite3.connect(db_path)) as connection:
             connection.row_factory = sqlite3.Row
-            rows = connection.execute(
-                "SELECT id, target_id, vulnerability_type, severity, status, "
-                "timestamp FROM scan_results ORDER BY timestamp DESC, id DESC"
-            ).fetchall()
-    except sqlite3.Error as exc:
-        raise ReportError(f"Could not read findings from {db_path}: {exc}") from exc
+            rows = connection.execute("SELECT * FROM scan_results WHERE UPPER(status)='OPEN' ORDER BY timestamp DESC,id DESC").fetchall()
+        values = []
+        for row in rows:
+            data = dict(row)
+            def get(key, default=""):
+                return data.get(key) or default
+            mappings = _parse_frameworks(get("compliance_frameworks")) or ([get("compliance_framework")] if get("compliance_framework") else [])
+            values.append(ScanRecord(id=get("id",0), target_id=get("target_id",0),
+                vulnerability_type=sanitize_text(get("vulnerability_type")),severity=get("severity"),status=get("status","UNKNOWN"),
+                timestamp=get("timestamp"),frameworks=tuple(sanitize_text(x) for x in mappings),
+                description_text=sanitize_text(get("description")),remediation_text=sanitize_text(get("remediation")),
+                rule_id=get("rule_id","legacy.unknown"),finding_id=get("finding_id"),target_path=sanitize_path(get("target_path","unknown")),
+                source_line=get("source_line",1),source_column=get("source_column",1),end_line=get("end_line",1),scan_id=get("scan_id"),resource=get("resource","unknown")))
+        return values
+    except sqlite3.Error:
+        raise ReportError("Could not load recorded evidence") from None
 
-    return [
-        ScanRecord(
-            id=row["id"],
-            target_id=row["target_id"],
-            vulnerability_type=row["vulnerability_type"] or "(unspecified)",
-            severity=row["severity"] or "",
-            status=row["status"] or "UNKNOWN",
-            timestamp=row["timestamp"] or "",
-        )
-        for row in rows
-    ]
+
+
+def _parse_frameworks(value: object) -> list[str]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value) if isinstance(value, str) else value
+    except (TypeError, ValueError):
+        return []
+    return parsed if isinstance(parsed, list) else []
 
 
 def group_by_severity(
@@ -192,7 +208,7 @@ def group_by_severity(
 
 def _escape_cell(text: str) -> str:
     """Make a value safe to embed in a Markdown table cell."""
-    return (text or "").replace("|", "\\|").replace("\n", " ").strip()
+    return sanitize_text(text or "").replace("|", "\\|").replace("\n", " ").strip()
 
 
 def render_report(
@@ -204,10 +220,10 @@ def render_report(
     moment = generated_at or datetime.now(timezone.utc)
     stamp = moment.strftime("%Y-%m-%d %H:%M:%S UTC")
     grouped = group_by_severity(records)
-    targets = sorted({record.target_id for record in records})
+    targets = sorted({str(getattr(record, "target_path", record.target_id)) for record in records})
 
     lines: list[str] = [
-        "# AntiFine Compliance Report",
+        "# AntiFine Security Evidence Report",
         "",
         f"**Generated:** {stamp}  ",
         f"**Source database:** `{db_path.name}`  ",
@@ -220,6 +236,14 @@ def render_report(
         "",
     ]
 
+    if db_path.is_file():
+        with closing(sqlite3.connect(db_path)) as coverage_db:
+            if coverage_db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='scan_runs'").fetchone():
+                lines += ["## Scan coverage", "", "Mappings are metadata, not control certification. Unsupported, error and unevaluated files cannot establish a pass.", ""]
+                for scan_id, status, coverage in coverage_db.execute("SELECT id,status,coverage FROM scan_runs ORDER BY rowid DESC LIMIT 100"):
+                    entries = json.loads(coverage)
+                    lines += [f"- Scan `{scan_id}`: {status}; " + ", ".join(f"{_escape_cell(v['file'])}: {v['status']}" for v in entries)]
+                lines.append("")
     if not records:
         lines += [
             "No findings are recorded in the audit database.",
@@ -245,13 +269,14 @@ def render_report(
         lines += [
             f"### {badge} {severity} ({len(bucket)})",
             "",
-            "| Target | Finding | Status | Detected |",
-            "| :--- | :--- | :--- | :--- |",
+            "| Target | Finding | Mappings | Status | Detected |",
+            "| :--- | :--- | :--- | :--- | :--- |",
         ]
         for record in bucket:
             lines.append(
-                f"| {record.target_id} "
+                f"| {_escape_cell(str(getattr(record, 'target_path', record.target_id)))} "
                 f"| {_escape_cell(record.vulnerability_type)} "
+                f"| {_escape_cell(', '.join(record.frameworks) or 'None supplied')} "
                 f"| {_escape_cell(record.status)} "
                 f"| {_escape_cell(record.timestamp)} |"
             )
@@ -259,25 +284,22 @@ def render_report(
 
         for record in bucket:
             lines += [
-                f"#### Target {record.target_id}: {record.vulnerability_type}",
+                f"#### {_escape_cell(str(getattr(record, 'target_path', record.target_id)))}: {_escape_cell(record.vulnerability_type)}",
+                "",
+                "**Compliance mappings**",
+                "",
+                *(
+                    [f"- {_escape_cell(mapping)}" for mapping in record.frameworks]
+                    or ["- None supplied by the deterministic scanner."]
+                ),
                 "",
                 "**Remediation & Hardening**",
                 ""
             ]
-            
-            kb = get_remediation(record.vulnerability_type)
-            lines += [
-                f"**Summary:** {kb['summary']}",
-                "",
-                "**Mitigation:**",
-                kb['mitigation'],
-                "",
-                "**Example:**",
-                kb['example'],
-                "",
-                "---",
-                ""
-            ]
+            lines += [record.remediation, "",
+                f"Evidence: rule `{getattr(record, 'rule_id', 'legacy.unknown')}`; finding `{getattr(record, 'finding_id', '')}`; "
+                f"location `{_escape_cell(getattr(record, 'target_path', 'unknown'))}:{getattr(record, 'source_line', 1)}`; scan `{getattr(record, 'scan_id', '')}`.",
+                "", "---", ""]
 
     lines += [
         "---",

@@ -68,6 +68,11 @@ class KnowledgeService:
     def get_rule(self, rule_id: str) -> RuleMetadata | None:
         return self._by_id.get(rule_id)
 
+    @property
+    def rules(self) -> tuple[RuleMetadata, ...]:
+        """Return the immutable catalog entries for index builders."""
+        return self._rules
+
     def search_rules(self, query: str) -> list[RuleMetadata]:
         terms = {part for part in query.lower().split() if part}
         if not terms:

@@ -33,6 +33,14 @@ def request() -> RemediationExplanationRequest:
 
 
 class RemediationAITests(unittest.TestCase):
+    def setUp(self):
+        req = request()
+        # These unit tests isolate model generation. HTTP integration tests verify
+        # the actual backend identity/preview authorization separately.
+        guard = patch("src.api.server.trusted_review", return_value=(req.finding, req.before, req.after))
+        guard.start()
+        self.addCleanup(guard.stop)
+
     def test_prompt_preserves_context_and_redacts_secrets(self) -> None:
         prompt = build_remediation_review_prompt(
             request().finding,

@@ -4,16 +4,23 @@ Exposes the AntiFine Python engine capabilities as a local REST API
 for decoupling the frontend from the core execution logic.
 """
 
-import ipaddress
-import sqlite3
 import sys
+import json
+import logging
 from pathlib import Path
 from typing import Dict, Any
-from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
+from src.api.security import LocalSecurityMiddleware, ORIGINS
+from src.services.settings import workspace_root
+from src.services.filesystem import BoundaryError, relative_target
+from src.services.workspaces import resolve_workspace
+from src.integrations.webhook_policy import validate_destination
+from pydantic import BaseModel, Field
 import uvicorn
 
 # Ensure the src directory is in the path
@@ -21,14 +28,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from database.setup import DB_PATH, initialize_database
 from src.scanners.ssrf_scanner import run_web_audit
-from src.scanners.iac_audit import run_iac_audit
-from src.scanners.remediation import RemediationError, remediate_file
-from src.scanners.compliance_mapper import map_finding_to_framework, get_finding_metadata
-from src.reporting.generate import generate_report
-from src.reporting.sarif_exporter import export_to_sarif
-from src.integrations.soc_dispatcher import dispatch_security_alert
+from src.scanners.compliance_mapper import get_finding_metadata
 from src.services.ollama_service import (
     OllamaConfig,
     OllamaDisabledError,
@@ -36,46 +37,70 @@ from src.services.ollama_service import (
     OllamaService,
 )
 from src.models.finding import Finding
+from src.models.ai_context import AIContext, AIMessage
 from src.services.ai_explanation import (
-    SYSTEM_PROMPT,
-    build_explanation_prompt,
     finding_id,
 )
+from src.services.secret_boundary import sanitize_path, sanitize_text
 from src.services.remediation_explanation import (
     REMEDIATION_REVIEW_SYSTEM_PROMPT,
     build_remediation_review_prompt,
 )
 from src.ai.knowledge_service import find_rule_for_finding
+from src.ai.context_builder import (
+    build_context,
+    unmapped_compliance_fallback,
+    sanitize_unmapped_compliance_claims,
+    source_metadata,
+)
+from src.services.advisory_guard import constrain
+from src.ai.prompts import EXPLANATION_SYSTEM_PROMPT, GENERAL_SYSTEM_PROMPT
+from src.ai.retriever import retrieve
 
 
 # ── Initialization ──────────────────────────────────────────────────────────
 
-try:
-    initialize_database()
-except Exception:
-    pass
 
 app = FastAPI(title="AntiFine Core Engine")
+
+
+class _NoRawAccessLog(logging.Filter):
+    def filter(self, record):
+        # Uvicorn includes raw query strings and paths. Safe operation/status
+        # logging belongs in the application layer, never in this raw channel.
+        return False
+
+
+logging.getLogger("uvicorn.access").addFilter(_NoRawAccessLog())
 
 # Strict CORS: only allow local frontend dev server
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=list(ORIGINS),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "X-AntiFine-Request", "X-AntiFine-Token"],
 )
 
+
+from src.api.core_routes import router as core_router
+from src.api.integrations_routes import router as integrations_router
+app.include_router(core_router)
+app.include_router(integrations_router)
+app.add_middleware(LocalSecurityMiddleware)
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(_request, exc):
+    return JSONResponse(status_code=422, content={"detail": "Invalid request fields"})
+
+@app.get("/api/health")
+async def health():
+    return {"status": "ok"}
 
 # ── Pydantic Models ─────────────────────────────────────────────────────────
 
 class SSRFScanRequest(BaseModel):
-    target_url: str
+    target_url: str = Field(max_length=4000)
 
 class IaCScanRequest(BaseModel):
     target_path: str
@@ -92,11 +117,18 @@ class WebhookTestModel(BaseModel):
     url: str
 
 class AITestRequest(BaseModel):
-    prompt: str
+    prompt: str = Field(max_length=12000)
 
 class FindingExplanationRequest(BaseModel):
     finding: Finding
-    code_context: str | None = None
+    code_context: str | None = Field(default=None,max_length=4000)
+
+class AIAskRequest(BaseModel):
+    question: str = Field(max_length=4000)
+    # ``str`` keeps older local clients working while new clients get a
+    # validated, structured context contract.
+    context: AIContext | str | None = None
+    messages: list[AIMessage] = Field(default_factory=list, max_length=10)
 
 class RemediationExplanationRequest(BaseModel):
     finding: Finding
@@ -105,6 +137,56 @@ class RemediationExplanationRequest(BaseModel):
     diff: str
     remediation: str = ""
     frameworks: list[str] = []
+    preview_id: str | None = None
+
+
+def trusted_finding(supplied: Finding) -> Finding:
+    """Client display fields never become authoritative AI context."""
+    from dataclasses import fields
+    from src.api.core_routes import repository
+    try:
+        data = repository().get(supplied.id)
+    except (ValueError, OSError):
+        raise HTTPException(422, "Explanation requires an open backend finding ID") from None
+    allowed = {field.name for field in fields(Finding)}
+    return Finding(**{key: value for key, value in data.items() if key in allowed})
+
+
+def trusted_review(req: RemediationExplanationRequest):
+    import time
+    from src.api.core_routes import repository
+    from src.services.settings import data_root
+    from src.services.remediation_service import _finding
+    identifier = req.preview_id or ""
+    if len(identifier) != 64 or any(c not in "0123456789abcdef" for c in identifier):
+        raise HTTPException(422, "AI review requires a current deterministic preview")
+    try:
+        record = json.loads((data_root() / "previews" / (identifier + ".json")).read_text(encoding="utf-8"))
+        if record["finding_id"] != req.finding.id or record["expires"] < time.time():
+            raise ValueError("Stale preview")
+        canonical = trusted_finding(req.finding)
+        _, _, _, _, _, before, after, _ = _finding(repository(), canonical.id)
+        if canonical.source_digest != record["digest"]:
+            raise ValueError("Stale source")
+        return canonical, before, after
+    except (ValueError, OSError):
+        raise HTTPException(422, "AI review requires a reproducible current preview") from None
+
+
+def canonical_ask_context(context):
+    if isinstance(context, AIContext) and context.source == "finding":
+        if not context.finding or not context.finding.finding_id:
+            raise HTTPException(422, "Finding context requires a backend finding_id")
+        from src.models.ai_context import AIFindingContext
+        canonical = trusted_finding(Finding("", "", "", id=context.finding.finding_id))
+        return AIContext(source="finding", finding=AIFindingContext(
+            finding_id=canonical.id, rule_id=canonical.rule_id, title=canonical.rule_name,
+            severity=canonical.severity, file=canonical.filename, line=canonical.line,
+            frameworks=canonical.frameworks, status=canonical.status, description=canonical.description,
+            remediation=canonical.remediation))
+    if isinstance(context, AIContext) and context.source != "general":
+        return "Unverified user context, advisory only: " + sanitize_text(context.model_dump_json(), limit=4000)
+    return context
 
 
 # ── Severity rank helper ────────────────────────────────────────────────────
@@ -117,200 +199,58 @@ def _ollama_error_message(exc: OllamaError) -> str:
         return "Ollama integration is disabled"
     if "not reachable" in str(exc).lower():
         return "Ollama is not reachable"
-    return str(exc)
+    return sanitize_text(exc, limit=500)
 
 
 # ── Webhook URL validation ──────────────────────────────────────────────────
 
 def _validate_webhook_url(url: str) -> None:
-    """Reject dangerous webhook URLs (file://, private IPs, etc.)."""
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        raise HTTPException(status_code=422, detail=f"Unsupported URL scheme: {parsed.scheme}. Only http/https allowed.")
-    hostname = parsed.hostname
-    if not hostname:
-        raise HTTPException(status_code=422, detail="Webhook URL must have a hostname.")
     try:
-        ip = ipaddress.ip_address(hostname)
-        if ip.is_private or ip.is_loopback or ip.is_reserved:
-            raise HTTPException(status_code=422, detail=f"Webhook URL must not target private/loopback IPs: {hostname}")
-    except ValueError:
-        # hostname is a domain name, not an IP — that's fine
-        pass
-
-
-def _dispatch_alerts_for_rows(rows: list, background_tasks: BackgroundTasks):
-    """Dispatch webhook alerts using >= severity rank comparison."""
-    try:
-        with sqlite3.connect(DB_PATH) as conn:
-            webhooks = conn.execute("SELECT url, min_severity FROM webhooks").fetchall()
-    except Exception:
-        webhooks = []
-        
-    if not webhooks:
-        return
-        
-    for row in rows:
-        target_id, vuln_type, severity, status, *rest = row
-        sev_rank = _SEVERITY_RANKS.get(severity.upper(), 0)
-        for url, min_severity in webhooks:
-            min_rank = _SEVERITY_RANKS.get(min_severity.upper(), 3)
-            if sev_rank >= min_rank:
-                finding_dict = {
-                    "vulnerability_type": vuln_type,
-                    "severity": severity,
-                    "compliance_tags": rest[0] if rest else "Unmapped",
-                }
-                background_tasks.add_task(dispatch_security_alert, finding_dict, url)
+        validate_destination(url)
+    except (ValueError, OSError):
+        raise HTTPException(status_code=422, detail="Webhook destination rejected by local policy") from None
 
 
 # ── Path sandboxing ─────────────────────────────────────────────────────────
 
 def _resolve_and_sandbox(target_path: str) -> Path:
-    """Resolve a scan target path and ensure it stays within PROJECT_ROOT."""
-    target = Path(target_path)
-    if target.is_absolute():
-        raise HTTPException(
-            status_code=422,
-            detail="Absolute paths are not allowed. Provide a path relative to the project root."
-        )
-    resolved = (PROJECT_ROOT / target).resolve()
-    if not str(resolved).startswith(str(PROJECT_ROOT.resolve())):
-        raise HTTPException(
-            status_code=422,
-            detail="Path traversal detected. Target must be within the project root."
-        )
-    if not resolved.exists():
-        raise HTTPException(
-            status_code=422,
-            detail=f"Target path not found: '{target_path}' (resolved to '{resolved}')."
-        )
-    return resolved
+    try:
+        if target_path.startswith("workspace_") and "/" not in target_path and "\\" not in target_path:
+            return resolve_workspace(target_path)
+        return relative_target(workspace_root(), target_path)
+    except (BoundaryError, OSError, ValueError):
+        raise HTTPException(status_code=422, detail="Invalid or unavailable workspace target") from None
 
 
 # ── Endpoints ───────────────────────────────────────────────────────────────
 
-@app.get("/api/analytics/dashboard")
-async def get_analytics_dashboard() -> Dict[str, Any]:
-    if not DB_PATH.is_file():
-        return {
-            "status": "ok", 
-            "overall_compliance_score": 100,
-            "severity_breakdown": [
-                {"name": "Critical", "value": 0},
-                {"name": "High", "value": 0},
-                {"name": "Medium", "value": 0},
-                {"name": "Low", "value": 0}
-            ],
-            "historical_trends": []
-        }
-    
-    try:
-        with sqlite3.connect(DB_PATH) as conn:
-            # Weighted compliance score based on severity
-            rows = conn.execute(
-                "SELECT UPPER(severity) AS sev, COUNT(*) FROM scan_results "
-                "WHERE status='OPEN' GROUP BY sev"
-            ).fetchall()
-            
-            penalty = 0
-            counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
-            for sev, cnt in rows:
-                if sev in counts:
-                    counts[sev] = cnt
-                if sev == "CRITICAL":
-                    penalty += cnt * 20
-                elif sev == "HIGH":
-                    penalty += cnt * 10
-                elif sev == "MEDIUM":
-                    penalty += cnt * 5
-                elif sev == "LOW":
-                    penalty += cnt * 1
-            
-            score = max(0, 100 - penalty)
-            
-            severity_breakdown = [
-                {"name": "Critical", "value": counts["CRITICAL"]},
-                {"name": "High", "value": counts["HIGH"]},
-                {"name": "Medium", "value": counts["MEDIUM"]},
-                {"name": "Low", "value": counts["LOW"]},
-            ]
-            
-            # Historical Trends (last 7 dates with data)
-            trend_rows = conn.execute(
-                "SELECT DATE(timestamp) as date, COUNT(*) FROM scan_results GROUP BY date ORDER BY date DESC LIMIT 7"
-            ).fetchall()
-            historical_trends = [{"date": r[0], "count": r[1]} for r in reversed(trend_rows)]
-            
-            return {
-                "status": "ok",
-                "overall_compliance_score": score,
-                "severity_breakdown": severity_breakdown,
-                "historical_trends": historical_trends
-            }
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-
-@app.get("/api/dashboard")
-async def get_dashboard() -> Dict[str, Any]:
-    """Return an aggregated summary of vulnerabilities from the database."""
-    counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
-    compliance_status = {}
-    if not DB_PATH.is_file():
-        return {"status": "ok", "counts": counts, "compliance": compliance_status}
-        
-    try:
-        with sqlite3.connect(DB_PATH) as conn:
-            rows = conn.execute(
-                "SELECT UPPER(severity) AS sev, COUNT(*) "
-                "FROM scan_results GROUP BY sev"
-            ).fetchall()
-            for sev, cnt in rows:
-                if sev in counts:
-                    counts[sev] = cnt
-                    
-            # Fetch compliance frameworks
-            comp_rows = conn.execute(
-                "SELECT compliance_framework, COUNT(*) "
-                "FROM scan_results WHERE compliance_framework IS NOT NULL AND compliance_framework != 'Unmapped' "
-                "GROUP BY compliance_framework"
-            ).fetchall()
-            for fw, cnt in comp_rows:
-                if fw:
-                    compliance_status[fw] = "Failing" if cnt > 0 else "Passing"
-                    
-    except sqlite3.Error as exc:
-        raise HTTPException(status_code=500, detail=f"Database error: {exc}")
-        
-    return {"status": "ok", "counts": counts, "compliance": compliance_status}
-
 
 @app.post("/api/scan/ssrf")
 async def run_ssrf_scan(req: SSRFScanRequest, background_tasks: BackgroundTasks) -> Dict[str, Any]:
-    """Execute the SSRF scanner against a target URL."""
+    from dataclasses import asdict
+    from src.api.core_routes import repository
+    from src.services.scanning import identity
+    from src.api.integrations_routes import dispatch_for_findings
     try:
-        # Trigger the web audit logic asynchronously
-        findings = run_web_audit(req.target_url, persist=False)
-        rows = []
-        for finding in findings:
-            vuln_type = finding.vulnerability_type
-            framework = map_finding_to_framework(vuln_type)
-            rows.append((1, vuln_type, finding.severity, "OPEN", framework))
-            
-        if rows:
-            with sqlite3.connect(DB_PATH) as conn:
-                conn.executemany(
-                    "INSERT INTO scan_results "
-                    "(target_id, vulnerability_type, severity, status, compliance_framework) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    rows,
-                )
-                conn.commit()
-            _dispatch_alerts_for_rows(rows, background_tasks)
-                
-        return {"status": "success", "message": f"SSRF scan completed for {req.target_url}"}
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        observed = await run_in_threadpool(run_web_audit, req.target_url, persist=False)
+        scan_id = identity(str(__import__('uuid').uuid4()))
+        file_id = identity(req.target_url)
+        values = []
+        for index, observation in enumerate(observed):
+            meta = get_finding_metadata(observation.vulnerability_type)
+            f = Finding(observation.vulnerability_type, observation.severity, sanitize_path(req.target_url),
+                frameworks=meta['frameworks'], remediation=meta['remediation'], rule_id='network.ssrf',
+                resource=f'probe/{index}', file_id=file_id, workspace_id='network', scan_id=scan_id)
+            f.id = identity(file_id,f.rule_id,f.resource)
+            values.append(f)
+        run = {'id':scan_id,'workspace_id':'network','scope_id':file_id,'target':sanitize_path(req.target_url),
+            'status':'partial','coverage':[{'file_id':file_id,'file':sanitize_path(req.target_url),'status':'evaluated','rules_evaluated':True}], 'findings_count':len(values)}
+        await run_in_threadpool(repository().save_run,run,values)
+        background_tasks.add_task(dispatch_for_findings,values)
+        return {'status':'partial','scan_id':scan_id,'findings_count':len(values),'findings':[asdict(f) | {'file':f.filename} for f in values],
+            'coverage':run['coverage'],'summary':'Network probe observations recorded; coverage is partial and does not establish compliance.'}
+    except Exception:
+        raise HTTPException(422,'Network scan could not complete safely') from None
 
 
 @app.get("/api/ai/health")
@@ -339,10 +279,10 @@ async def ollama_test(req: AITestRequest) -> Dict[str, str]:
     if not req.prompt.strip():
         raise HTTPException(status_code=422, detail="Prompt must not be empty")
     try:
-        response = await OllamaService().generate(req.prompt)
-        return {"response": response}
+        response = await OllamaService().generate(sanitize_text(req.prompt, limit=12000))
+        return {"response": constrain(response)}
     except OllamaDisabledError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail=_ollama_error_message(exc)) from exc
     except OllamaError as exc:
         raise HTTPException(status_code=502, detail=_ollama_error_message(exc)) from exc
 
@@ -350,25 +290,91 @@ async def ollama_test(req: AITestRequest) -> Dict[str, str]:
 @app.post("/api/ai/findings/explain")
 async def explain_finding(req: FindingExplanationRequest) -> Dict[str, Any]:
     """Explain an existing deterministic finding using the local model."""
+    canonical = await run_in_threadpool(trusted_finding, req.finding)
     service = OllamaService()
     try:
+        matched_rule = find_rule_for_finding(canonical)
+        query = " ".join(
+            filter(
+                None,
+                [
+                    matched_rule.rule_id if matched_rule else "",
+                    canonical.rule_name,
+                    canonical.severity,
+                    *canonical.frameworks,
+                ],
+            )
+        )
+        retrieved = retrieve(query, top_k=5)
         explanation = await service.generate(
-            build_explanation_prompt(
-                req.finding,
+            build_context(
+                "Explain this existing AntiFine finding.",
+                retrieved,
+                canonical,
                 req.code_context,
-                find_rule_for_finding(req.finding),
             ),
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=EXPLANATION_SYSTEM_PROMPT,
         )
         return {
-            "finding_id": finding_id(req.finding),
+            "finding_id": finding_id(canonical),
             "model": service.config.model,
             "provider": "ollama",
-            "explanation": explanation,
+            "explanation": constrain(explanation, canonical.severity),
             "generated_locally": True,
+            "sources": source_metadata(retrieved),
         }
     except OllamaDisabledError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail=_ollama_error_message(exc)) from exc
+    except OllamaError as exc:
+        raise HTTPException(status_code=502, detail=_ollama_error_message(exc)) from exc
+
+
+@app.post("/api/ai/ask")
+async def ask_ai(req: AIAskRequest) -> Dict[str, Any]:
+    """Answer a question using retrieved local AntiFine knowledge."""
+    if not req.question.strip():
+        raise HTTPException(status_code=422, detail="Question must not be empty")
+    req.context = await run_in_threadpool(canonical_ask_context, req.context)
+    context_text = build_context(
+        req.question,
+        [],
+        structured_context=req.context,
+    )
+    rule_id = None
+    frameworks = None
+    if isinstance(req.context, AIContext) and req.context.source == "finding" and req.context.finding:
+        rule_id = req.context.finding.rule_id
+        frameworks = req.context.finding.frameworks
+    retrieved = retrieve(
+        f"{req.question}\n{context_text}",
+        top_k=5,
+        authoritative_rule_id=rule_id,
+        authoritative_frameworks=frameworks,
+    )
+    try:
+        service = OllamaService()
+        answer = await service.generate(
+            build_context(
+                req.question,
+                retrieved,
+                structured_context=req.context,
+                messages=req.messages,
+            ),
+            system_prompt=GENERAL_SYSTEM_PROMPT,
+        )
+        fallback = unmapped_compliance_fallback(req.question, req.context, retrieved)
+        answer = fallback or sanitize_unmapped_compliance_claims(
+            answer, req.question, req.context, retrieved
+        )
+        answer = constrain(answer, req.context.finding.severity if isinstance(req.context, AIContext) and req.context.finding else None)
+        return {
+            "answer": answer,
+            "model": service.config.model,
+            "provider": "ollama",
+            "sources": source_metadata(retrieved),
+        }
+    except OllamaDisabledError as exc:
+        raise HTTPException(status_code=503, detail=_ollama_error_message(exc)) from exc
     except OllamaError as exc:
         raise HTTPException(status_code=502, detail=_ollama_error_message(exc)) from exc
 
@@ -376,242 +382,33 @@ async def explain_finding(req: FindingExplanationRequest) -> Dict[str, Any]:
 @app.post("/api/ai/remediation/explain")
 async def explain_remediation(req: RemediationExplanationRequest) -> Dict[str, Any]:
     """Explain an existing deterministic remediation without changing it."""
+    canonical, before, after = await run_in_threadpool(trusted_review, req)
     service = OllamaService()
     try:
         explanation = await service.generate(
             build_remediation_review_prompt(
-                req.finding,
-                req.before,
-                req.after,
-                req.diff,
-                req.remediation,
-                req.frameworks,
+                canonical,
+                before,
+                after,
+                "BEFORE\n" + before + "\nAFTER\n" + after,
+                canonical.remediation,
+                canonical.frameworks,
             ),
             system_prompt=REMEDIATION_REVIEW_SYSTEM_PROMPT,
         )
         if not explanation.strip():
             raise OllamaError("Ollama returned an empty remediation explanation")
         return {
-            "finding_id": finding_id(req.finding),
+            "finding_id": finding_id(canonical),
             "model": service.config.model,
             "provider": "ollama",
-            "explanation": explanation,
+            "explanation": constrain(explanation, canonical.severity),
             "generated_locally": True,
         }
     except OllamaDisabledError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail=_ollama_error_message(exc)) from exc
     except OllamaError as exc:
         raise HTTPException(status_code=502, detail=_ollama_error_message(exc)) from exc
-
-
-@app.post("/api/scan/iac")
-async def run_iac_scan(req: IaCScanRequest, background_tasks: BackgroundTasks) -> Dict[str, Any]:
-    """Execute the IaC scanner against a local file or directory.
-
-    Resolves relative paths against the project root. Sandboxed to PROJECT_ROOT.
-    Persists every finding (with compliance framework tag) to antifine.db
-    and dispatches webhook alerts for HIGH/CRITICAL findings.
-    """
-    try:
-        resolved = _resolve_and_sandbox(req.target_path)
-
-        # ── Run the scanner (no internal persistence — we handle it here) ──────
-        raw_findings = run_iac_audit(str(resolved), persist=False)
-
-        # ── Build enriched response + DB rows from Finding objects ──────────────
-        enriched: list[Dict[str, Any]] = []
-        rows = []
-        for finding in raw_findings:
-            # Use the Finding's own frameworks/remediation if present,
-            # otherwise fall back to the compliance mapper for legacy rules.
-            if finding.frameworks:
-                primary_framework = finding.frameworks[0]
-                frameworks_list = finding.frameworks
-                remediation = finding.remediation
-                description = finding.description or finding.rule_name
-            else:
-                meta = get_finding_metadata(finding.rule_name)
-                primary_framework = meta["primary_framework"]
-                frameworks_list = meta["frameworks"]
-                remediation = meta["remediation"]
-                description = meta["description"]
-
-            enriched.append({
-                "rule_name": finding.rule_name,
-                "severity": finding.severity,
-                "compliance_framework": primary_framework,
-                "frameworks": frameworks_list,
-                "description": description,
-                "remediation": remediation,
-            })
-            rows.append((1, finding.rule_name, finding.severity, "OPEN", primary_framework, finding.filename))
-
-        # ── Deduplicate: remove old findings for this target, then insert fresh ─
-        if rows:
-            try:
-                initialize_database()
-                with sqlite3.connect(DB_PATH) as conn:
-                    # Delete previous findings for the same target path
-                    target_filenames = {finding.filename for finding in raw_findings}
-                    for tf in target_filenames:
-                        conn.execute(
-                            "DELETE FROM scan_results WHERE target_path = ?",
-                            (tf,),
-                        )
-                    conn.executemany(
-                        "INSERT INTO scan_results "
-                        "(target_id, vulnerability_type, severity, status, compliance_framework, target_path) "
-                        "VALUES (?, ?, ?, ?, ?, ?)",
-                        rows,
-                    )
-                    conn.commit()
-            except sqlite3.Error as db_exc:
-                print(f"[warn] DB write failed: {db_exc}", file=sys.stderr)
-
-            _dispatch_alerts_for_rows(rows, background_tasks)
-
-        findings_count = len(enriched)
-        return {
-            "status": "completed",
-            "target": str(resolved),
-            "findings_count": findings_count,
-            "findings": enriched,
-            "summary": (
-                f"Audit complete: {findings_count} compliance violation{'s' if findings_count != 1 else ''} identified."
-                if findings_count > 0
-                else "Audit complete: no violations detected. Target appears compliant."
-            ),
-        }
-
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-
-
-@app.post("/api/scan/iac/remediate")
-async def remediate_iac(req: RemediationRequest) -> Dict[str, Any]:
-    """Safely apply one supported fix, back up the file, and re-scan it."""
-    try:
-        resolved = _resolve_and_sandbox(req.target_path)
-        result = remediate_file(resolved, req.rule_name)
-        findings = run_iac_audit(str(resolved), persist=False)
-        return {
-            "status": "remediated",
-            "target": str(resolved),
-            "backup": str(result.backup_path),
-            "action": result.action,
-            "findings_count": len(findings),
-            "findings": [
-                {"rule_name": f.rule_name, "severity": f.severity}
-                for f in findings
-            ],
-        }
-    except (RemediationError, UnicodeDecodeError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except HTTPException:
-        raise
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"Could not update target: {exc}") from exc
-
-
-@app.get("/api/integrations/webhooks")
-async def get_webhooks() -> Dict[str, Any]:
-    try:
-        with sqlite3.connect(DB_PATH) as conn:
-            rows = conn.execute("SELECT id, url, min_severity FROM webhooks").fetchall()
-            webhooks = [{"id": r[0], "url": r[1], "min_severity": r[2]} for r in rows]
-            return {"status": "ok", "webhooks": webhooks}
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-
-@app.post("/api/integrations/webhooks")
-async def save_webhook(req: WebhookModel) -> Dict[str, Any]:
-    _validate_webhook_url(req.url)
-    try:
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.execute(
-                "INSERT INTO webhooks (url, min_severity) VALUES (?, ?) "
-                "ON CONFLICT(url) DO UPDATE SET min_severity=excluded.min_severity",
-                (req.url, req.min_severity)
-            )
-            conn.commit()
-        return {"status": "success", "message": "Webhook saved"}
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-
-@app.post("/api/integrations/test")
-async def test_webhook(req: WebhookTestModel, background_tasks: BackgroundTasks) -> Dict[str, Any]:
-    _validate_webhook_url(req.url)
-    finding_dict = {
-        "vulnerability_type": "Test Alert - AntiFine System Check",
-        "severity": "CRITICAL",
-        "compliance_tags": "None",
-        "remediation_guidance": "Ignore this alert. It is a test."
-    }
-    background_tasks.add_task(dispatch_security_alert, finding_dict, req.url)
-    return {"status": "success", "message": "Test alert dispatched"}
-
-@app.get("/api/scan/iac/export/sarif")
-async def export_iac_sarif() -> Dict[str, Any]:
-    """Export all open IaC findings in SARIF 2.1.0 format."""
-    try:
-        from src.reporting.sarif_exporter import generate_sarif
-        if not DB_PATH.is_file():
-            return generate_sarif([])
-            
-        with sqlite3.connect(DB_PATH) as conn:
-            rows = conn.execute(
-                "SELECT vulnerability_type, severity, compliance_framework, target_path "
-                "FROM scan_results WHERE status='OPEN'"
-            ).fetchall()
-            
-        findings = []
-        for row in rows:
-            vuln_type = row[0]
-            severity = row[1]
-            fw = row[2]
-            target_path = row[3] if len(row) > 3 and row[3] else "project-root"
-            
-            from src.scanners.compliance_mapper import get_finding_metadata
-            meta = get_finding_metadata(vuln_type)
-            
-            findings.append({
-                "vulnerability_type": vuln_type,
-                "severity": severity,
-                "compliance_framework": fw,
-                "frameworks": meta["frameworks"],
-                "remediation": meta["remediation"],
-                "target": target_path,
-            })
-            
-        sarif_report = generate_sarif(findings)
-        return sarif_report
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-
-
-@app.post("/api/report/generate")
-async def generate_reports() -> Dict[str, Any]:
-    """Trigger the generation of both Markdown and SARIF reports."""
-    results = {}
-    
-    try:
-        md_path, md_count = generate_report()
-        results["markdown"] = {"status": "success", "file": str(md_path), "findings": md_count}
-    except Exception as exc:
-        results["markdown"] = {"status": "error", "message": str(exc)}
-        
-    try:
-        code = export_to_sarif("results.sarif")
-        if code == 0:
-            results["sarif"] = {"status": "success", "file": "results.sarif"}
-        else:
-            results["sarif"] = {"status": "error", "message": f"SARIF exporter returned non-zero code: {code}"}
-    except Exception as exc:
-        results["sarif"] = {"status": "error", "message": str(exc)}
-        
-    return {"status": "completed", "results": results}
 
 
 # ── Execution ───────────────────────────────────────────────────────────────
