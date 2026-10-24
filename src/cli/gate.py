@@ -39,6 +39,7 @@ def main():
         help="Minimum severity threshold to fail the gate"
     )
     parser.add_argument("--min-score", type=int, help="Minimum compliance score (0-100)", required=False)
+    parser.add_argument('--allow-unsupported', action='store_true', help='Explicitly gate evaluated supported files while reporting that unsupported files are outside the decision.')
     
     args = parser.parse_args()
     
@@ -46,12 +47,14 @@ def main():
     
     try:
         # We don't want to pollute the DB during a CI/CLI scan
-        findings = run_iac_audit(args.file, persist=False)
+        findings = run_iac_audit(args.file, persist=False, allow_unsupported=args.allow_unsupported)
     except Exception as e:
         print(f"\033[91mError running scan: {e}\033[0m", file=sys.stderr)
         sys.exit(1)
         
     failed = False
+    if args.allow_unsupported:
+        print('Coverage policy: supported files only; unsupported files are not a security pass. Failed supported evaluations still fail the gate.')
     
     if findings:
         for finding in findings:

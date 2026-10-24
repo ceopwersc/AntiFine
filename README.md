@@ -24,12 +24,13 @@ AntiFine is intended for a trusted local workstation. It is not a hosted multi-u
 - [Configuration](#configuration)
 - [Testing and CI](#testing-and-ci)
 - [Security considerations and limitations](#security-considerations-and-limitations)
+- [Repository hygiene](#repository-hygiene)
 - [Contributing](#contributing)
 - [License](#license)
 
 ## Features and coverage
 
-The workstation provides file imports and authorized local-path scans, finding search and filters, source details, fix previews, scan history, safe secret metadata, Markdown reports, and SARIF exports. Findings reload from the backend after a browser refresh. Dialogs support keyboard focus and Escape dismissal.
+The workstation provides project-folder/file imports, a private synthetic Terraform demo, authorized local-path scans, severity/file/status/rule-family filters, resource evidence, focused source diffs, explicit approval, persistent verification history, Markdown reports, and SARIF exports. Findings reload from the backend after a browser refresh. Dialogs support keyboard focus and Escape dismissal.
 
 | Input | Implemented checks | Limits |
 |---|---|---|
@@ -99,7 +100,7 @@ Dependencies are pinned in [requirements.lock](requirements.lock), [requirements
 Clone the branch containing this implementation:
 
 ```bash
-git clone --branch feature/workstation-evidence https://github.com/ceopwersc/AntiFine.git
+git clone --branch codex/sprint-1-workflow https://github.com/ceopwersc/AntiFine.git
 cd AntiFine
 ```
 
@@ -161,14 +162,16 @@ Vite preview is a local bundle check, not a supported public production hosting 
 ## Using the workstation
 
 1. Open **Scan** and choose an import or **Server-local path**. Imports are private copies; local-path fixes edit the actual authorized source.
-2. For a safe first run, import [tests/fixtures/public-database.tf](tests/fixtures/public-database.tf). This synthetic fixture produces a public-database finding. Fixing its imported copy leaves the tracked fixture unchanged.
+2. Choose **Try safe Terraform demo**. It creates a private copy of [examples/terraform-workflow](examples/terraform-workflow/README.md): identical `dev/main.tf` and `prod/main.tf` files with a public `aws_db_instance.customer_demo` and a private sibling. No cloud credentials, Terraform executable, or AI setup is required. Never deploy these scan-only fixtures. **Choose project** imports your own folder while preserving relative paths.
 3. Inspect coverage and open the finding drawer. Search/filters narrow persisted findings; the Secrets view withholds values.
-4. For an eligible finding, choose **Review fix**, inspect the diff, and apply. Preview failure keeps Apply disabled.
+4. Choose an eligible finding and **Review fix**. Check the exact file, resource, source version and scalar diff, explicitly check **I approve this exact change**, then apply. Preview failure keeps Apply disabled. Fixing an imported copy leaves the original project untouched.
 5. Review the rescan and remaining findings, then download Markdown or SARIF from **Reports**.
 
 Server-local paths are relative to `ANTIFINE_WORKSPACE_ROOT`, defaulting to the repository root; `tests/fixtures` selects the example directory. HTTP clients cannot select arbitrary absolute paths outside that root. Containment checks reject escapes, symlinks, junctions/reparse points, and ambiguous Windows path components.
 
-Directory discovery selects supported names/extensions and skips directories such as `.git`, virtual environments, `node_modules`, `dist`, and `build`. Unsupported directory entries are not an inventory of assessed files. A directly selected unsupported file has unsupported/error coverage.
+Windows short-name aliases are compared using canonical paths after the original path has been checked for link/reparse traversal. This accepts equivalent authorized spellings while retaining containment and unsafe-name rejection.
+
+Directory discovery inventories selected files, including unsupported formats, while excluding tool/cache directories such as `.git`, `.terraform`, virtual environments, `node_modules`, `dist`, and `build`. The project picker reports its excluded tool/cache file count; backend coverage lists every imported/selected file and its evaluated or attempted rule families. Unsupported entries make mixed scans partial. They never silently satisfy a security gate. Browser imports are bounded to 100 files/16 MiB; choose a focused infrastructure folder rather than a whole checkout with dependencies.
 
 Responses distinguish `completed`, `partial`, and `error`, with per-file `evaluated`, `unsupported`, or `error` states. Completed scans can contain findings; an empty directory can be enumerated without evaluating a file. Read findings and coverage together. Neither case establishes compliance.
 
@@ -196,6 +199,7 @@ python -m src.cli.gate --file tests/fixtures/public-database.tf --fail-on CRITIC
 | `--file PATH` | Required file or directory. CLI paths belong to the invoking OS account; HTTP workspace authorization does not apply. |
 | `--fail-on LOW\|MEDIUM\|HIGH\|CRITICAL` | Minimum severity that fails the gate; default `HIGH`. |
 | `--min-score INTEGER` | Legacy severity-weighted risk heuristic, not a compliance score/certification. Prefer the severity threshold. |
+| `--allow-unsupported` | Explicitly assess supported files only; unsupported files remain unevaluated. Requires at least one evaluated file, no evaluation errors, and complete enumeration. Severity policy still applies. |
 | `-h`, `--help` | Show usage. |
 
 Exit **0** means evaluated files meet policy. Exit **1** means a threshold violation or unsupported, incomplete, or failed scanning; empty evaluation cannot pass. Argument-parser errors exit **2**. The gate does not persist findings or require HTTP authentication.
@@ -206,7 +210,7 @@ Exit **0** means evaluated files meet policy. Exit **1** means a threshold viola
 
 | Option | Current behavior / limitation |
 |---|---|
-| `--init` | Initialize legacy database tables. Repository use triggers schema-v3 migration. |
+| `--init` | Initialize legacy database tables. Repository use triggers schema-v4 migration. |
 | `--audit-iac FILE_OR_DIR` | Scan and persist unless `--dry-run` is supplied. Its exit code is not a severity gate. |
 | `--audit-local` | Run `scripts/port_mapper.sh`; requires Bash and a supported port-listing utility. |
 | `--audit-web URL` | Send active SSRF probes to an authorized target. |
@@ -231,16 +235,19 @@ The API base is `http://127.0.0.1:8000`. Except for health and session bootstrap
 |---|---|---|
 | GET | `/api/health` | Unauthenticated liveness. |
 | POST | `/api/session` | Local session bootstrap in middleware. |
+| POST | `/api/scan/demo` | Create a private synthetic Terraform project; returns an opaque workspace ID. |
 | POST | `/api/scan/upload` | Multipart `files`; optional JSON-array form field `relative_paths`. Returns an opaque workspace ID. |
 | POST | `/api/scan/iac` | JSON `target_path`: authorized relative path or uploaded `workspace_*` ID. Returns status, findings, scan ID, coverage. |
-| GET | `/api/findings` | Persisted current records with lifecycle status. |
+| GET | `/api/findings` | Persisted current records, resource evidence, lifecycle and verification status. |
+| POST | `/api/findings/{finding_id}/rescan` | Read-only rescan using persisted backend file identity; rejects caller paths. |
+| GET | `/api/remediations` | Recent immutable approved pending/final remediation events. |
 | GET | `/api/findings/secrets` | Open secret findings; safe metadata only. |
 | GET | `/api/scan/history` | Recent runs, including clean/partial runs and coverage. |
 | GET | `/api/dashboard` | Open-finding counts and mapping metadata. |
 | GET | `/api/analytics/dashboard` | Severity/coverage data; compliance score is `null`, trends unavailable. |
 | POST | `/api/scan/iac/remediation/preview` | JSON `finding_id`; source-bound preview. |
-| POST | `/api/scan/iac/remediate` | JSON `finding_id` and current `preview_id`; validate, back up, apply, rescan. |
-| GET | `/api/scan/iac/export/sarif` | Current open findings and coverage as SARIF 2.1.0. |
+| POST | `/api/scan/iac/remediate` | JSON `finding_id`, current `preview_id`, and strict boolean `approved: true`; validate, back up, apply, rescan. |
+| GET | `/api/scan/iac/export/sarif` | Current open findings, coverage and recent remediation evidence as SARIF 2.1.0. |
 | POST | `/api/report/generate` | Create private Markdown; returns `results.markdown.file`. |
 | GET | `/api/reports/{filename}` | Authenticated Markdown download. |
 
@@ -296,9 +303,9 @@ Automatic edits currently cover only these observed booleans:
 
 Missing fields, ambiguous/shared YAML source, unsupported rules, and Docker user/healthcheck changes are manual-only. AntiFine does not invent an account or add `HEALTHCHECK CMD true` as an automatic fix.
 
-A preview binds a persisted finding to its file/resource and source digest. Apply revalidates that source, creates an immutable private backup, uses atomic replacement, and reparses/rescans before persistence. A source edit invalidates the preview. Title-based remediation requests are deliberately rejected.
+A preview binds a persisted finding to its file/resource, source digest and candidate digest. It returns a bounded, sanitized source excerpt and unified diff with actual line numbers. Apply requires strict explicit approval, revalidates that source, creates an immutable private backup, records verification pending, uses atomic replacement, and reparses/rescans. A final verification event and rescan findings commit together. A source edit invalidates the preview. Title-based remediation requests are deliberately rejected.
 
-Removing the selected finding while others remain produces an applied change with `verified: false`. Only a complete zero-finding file rescan is verified. Failed verification attempts to restore original bytes when safe; concurrent external changes prevent an unsafe rollback and require review.
+Removing the selected finding while others remain records `resolved_with_findings` with `verified: false`. Only the original finding is resolved; the file retains its remaining findings. Introduced findings reject the operation and trigger rollback. Only a complete zero-finding file rescan is verified. Failed verification attempts to restore original bytes when safe; concurrent external changes prevent an unsafe rollback and require review.
 
 Opaque backups are never silently overwritten and contain original source bytes. Recovery and quota-driven archival are operator filesystem tasks; there is no browser restore endpoint.
 
@@ -321,9 +328,9 @@ Raw bytes necessarily remain in selected local source files and private copies. 
 
 Private storage uses restrictive POSIX permissions or a protected owner/SYSTEM Windows DACL. Imports expire after 24 hours; cleanup runs on upload/workspace access, not a background scheduler. Previews expire after ten minutes; old records are cleaned during preview creation. Backups remain until operator archival. Generated reports have no automatic retention/quota policy.
 
-Schema v3 stores current findings in `scan_results`, runs/coverage in `scan_runs`, and independent per-run snapshots in `scan_evidence`. Finding records carry backend IDs, rule/file/resource metadata, source digests, scan IDs, and regions where available. Workspace-relative identity distinguishes same-basename files. Legacy target/webhook tables remain for compatibility.
+Schema v4 stores current findings in `scan_results`, runs/coverage in `scan_runs`, independent per-run snapshots in `scan_evidence`, and immutable approval/verification events in `remediation_runs`. The additive v3-to-v4 migration preserves existing run evidence. Newly scanned Terraform resources have semantic address keys stable across resource reordering; ambiguous duplicate addresses fail closed. Legacy rows need a rescan to acquire the new metadata. Finding records carry backend IDs, rule/file/resource metadata, source digests, scan IDs, and regions where available. Workspace-relative identity distinguishes same-basename files. Legacy target/webhook tables remain for compatibility.
 
-Successfully evaluated files reconcile prior open findings, including clean rescans. Failed files retain prior evidence. Removed files are reconciled after a successful complete enumeration of the same scope. The history API returns recent runs; current-finding reports are not full historical snapshot exports.
+Successfully evaluated files reconcile prior open findings, including clean rescans. Failed files retain prior evidence. Removed files are reconciled after a successful complete enumeration of the same scope. The history and remediation APIs return their latest 100 records; current-finding reports are not full historical snapshot exports. Verification states include pending, verified resolved, resolved with findings, verification failed, rescan resolved and reopened. They describe recorded evidence, not live deployed state. A crash after a durable pending event leaves verification pending for operator review; there is no automatic crash recovery or restore UI.
 
 Before an existing-database upgrade:
 
@@ -336,10 +343,10 @@ SQLite secure deletion clears replaced cells during migration. Existing backups,
 
 ## Reports and exports
 
-- **Markdown:** `POST /api/report/generate`, then authenticated `GET /api/reports/{filename}`. The workstation downloads private evidence containing current open findings, mappings, supported identifiers/locations, and recorded coverage.
-- **SARIF 2.1.0:** `GET /api/scan/iac/export/sarif`. Includes rule IDs, supported regions, finding/scan/resource properties, mappings, and coverage. Regression tests validate against the bundled SARIF schema.
+- **Markdown:** `POST /api/report/generate`, then authenticated `GET /api/reports/{filename}`. The workstation downloads private evidence containing current open findings, mappings, supported identifiers/locations, recorded coverage, and immutable remediation history with backup and verification scan identifiers.
+- **SARIF 2.1.0:** `GET /api/scan/iac/export/sarif`. Includes rule IDs, supported regions, finding/scan/resource properties, mappings, coverage and remediation history. Regression tests validate against the bundled SARIF schema.
 
-The older CLI's `--export-sarif FILE` exports findings but does not populate the API's scan-coverage collection. Use private output paths and avoid overwriting evidence. Repository example artifacts do not establish current source state.
+The older CLI's `--export-sarif FILE` exports findings but does not populate the API's scan-coverage collection. Use private output paths and avoid overwriting evidence. Generated reports are ignored local outputs rather than versioned evidence of current source state.
 
 **PDF generation is not implemented.** There is no PDF endpoint, report queue, or automatic compliance certification.
 
@@ -411,11 +418,11 @@ npm run test:e2e -- --repeat-each=2
 
 Linux CI uses `npx playwright install --with-deps chromium` for system dependencies; this can need appropriate package-install permissions.
 
-pytest configures temporary database/workspace/private roots before app imports. Playwright starts an isolated real API and built frontend preview with synthetic fixtures; failure artifacts go to temporary storage. Cases cover scans, nested imports, preview rejection, exact apply/backup/rescan, reload, source confidentiality, navigation/filters, keyboard/responsive behavior, and report errors. AI/webhook security tests use mocks rather than live generation or external delivery.
+pytest configures temporary database/workspace/private roots before app imports. Playwright starts an isolated real API and built frontend preview with synthetic fixtures; failure artifacts go to temporary storage. Cases cover scans, same-basename/same-size nested imports, safe demo onboarding, preview rejection, explicit approval, exact resource edits, immutable backups, deterministic rescan, stale-source rejection with a real rescan, partial/malformed/unsupported coverage, persistent reload, evidence downloads, source confidentiality, navigation/filters, keyboard/responsive behavior, and report errors. AI/webhook security tests use mocks rather than live generation or external delivery.
 
 The [release workflow](.github/workflows/security.yml) defines Windows/Linux Python 3.12/3.14 backend/CLI jobs and Linux Node 24 lint/typecheck/build/repeated-browser checks. A workflow definition is not a passing remote run; check GitHub Actions for the specific commit.
 
-Local audit-release evidence records **115 backend passes, one Windows symlink-privilege skip, and 12 repeated browser passes**. The actual Windows junction test passed. [The A01-A16 implementation record](docs/SECURITY_REMEDIATION.md) describes fixes, evidence, and unverified environments. Current runs remain authoritative.
+Historical audit-release evidence recorded **115 backend passes, one Windows symlink-privilege skip, and 12 repeated browser passes**. Sprint 1 validation and product scope are recorded in [the product roadmap](docs/PRODUCT_ROADMAP.md). The actual Windows junction test passed. [The A01-A16 implementation record](docs/SECURITY_REMEDIATION.md) describes fixes, evidence, and unverified environments. Current runs remain authoritative.
 
 ## Security considerations and limitations
 
@@ -425,6 +432,12 @@ Local audit-release evidence records **115 backend passes, one Windows symlink-p
 - Protect sources, backups, database copies, exports, and configuration. Secret detection/redaction have false-positive and false-negative limits.
 - Network probes and webhooks can leave the workstation; use authorized targets. Local tests do not establish live Ollama, external delivery, or every CI platform's behavior.
 - Docker automatic fixes, PDF reports, a complete audit orchestrator, comprehensive history/analytics/report management, and autonomous AI remediation are not implemented.
+
+## Repository hygiene
+
+The [cleanup inventory](docs/REPOSITORY_CLEANUP.md) records confirmed removals and intentionally retained files. Generated bytecode, caches, build/browser output, logs, local databases, credentials, and report outputs are ignored. Root `compliance_report.md` and `results.sarif` are generated locally and are not required inputs; older copies are preserved locally when untracked.
+
+An ignored file is not automatically disposable. Preserve `.env`, real databases, uploaded projects, source backups, custom assets, and unrelated work. Inspect contents and references before removing a named artifact; do not use blanket cleanup commands against a workstation containing user data. Keep lockfiles, migrations, maintained fixtures, public assets, and CI configuration under version control.
 
 ## Contributing
 

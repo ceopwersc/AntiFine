@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { BackendFinding } from './types';
+import type { BackendFinding, ScanResponse, ScanRun, FileCoverage } from './types';
 
 const apiClient = axios.create({
   baseURL: '/api',
@@ -153,7 +153,7 @@ export const fetchSecretFindings = async (): Promise<{ status: string; findings:
   return (await apiClient.get<{ status: string; findings: SecretFinding[] }>('/findings/secrets')).data;
 };
 
-export const runScan = async (target: string, type: string) => {
+export const runScan = async (target: string, type: string): Promise<ScanResponse> => {
   const isIaC = type === 'IaC Config Audit';
   const endpoint = isIaC ? '/scan/iac' : '/scan/ssrf';
   const body = isIaC ? { target_path: target } : { target_url: target };
@@ -171,8 +171,10 @@ export const uploadScanWorkspace = async (files: File[]): Promise<{ target_path:
 };
 
 export const fetchScanHistory = async () => {
-  return (await apiClient.get('/scan/history')).data;
+  return (await apiClient.get<{scans: ScanRun[]}>('/scan/history')).data;
 };
+export const createDemoWorkspace = async (): Promise<{target_path: string}> => (await apiClient.post('/scan/demo')).data;
+export const rescanFinding = async (findingId: string): Promise<ScanResponse> => (await apiClient.post(`/findings/${encodeURIComponent(findingId)}/rescan`)).data;
 
 export interface FixResult {
   status: string;
@@ -184,12 +186,17 @@ export interface FixResult {
   findings_count: number;
   findings: BackendFinding[];
   scan_id: string;
+  original_resolved: boolean;
+  introduced_count: number;
+  remediation_id: string;
+  coverage: FileCoverage[];
 }
 export const remediateFinding = async (findingId: string, previewId: string): Promise<FixResult> =>
-  (await apiClient.post('/scan/iac/remediate', { finding_id: findingId, preview_id: previewId })).data;
+  (await apiClient.post('/scan/iac/remediate', { finding_id: findingId, preview_id: previewId, approved: true })).data;
 
 export const previewRemediation = async (findingId: string): Promise<{
   preview_id: string; finding_id: string; source_digest: string; target: string; action: string; before: string; after: string;
+  diff: string; start_line: number; end_line: number; changed_line: number; rule_id: string; resource_label: string; conditions: string[];
 }> => (await apiClient.post('/scan/iac/remediation/preview', { finding_id: findingId })).data;
 
 export const explainFinding = async (

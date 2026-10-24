@@ -13,8 +13,9 @@ WifiOff
 } from 'lucide-react';
 import { useEffect,useState } from 'react';
 import { fetchScanHistory,fetchSecretFindings,generateReport } from '../api';
-import type { Page } from '../types';
+import type { Page, ScanRun } from '../types';
 import { PageHeader } from './WorkstationUI';
+import {CoveragePanel} from './CoveragePanel';
 export function SecretsPage() {
   const [secrets, setSecrets] = useState<Awaited<ReturnType<typeof fetchSecretFindings>>['findings']>([]);
   const [error, setError] = useState('');
@@ -25,7 +26,7 @@ export function SecretsPage() {
 }
 
 export function HistoryPage() {
-  const [scans, setScans] = useState<any[]>([]);
+  const [scans, setScans] = useState<ScanRun[]>([]);
   const [scanTypeFilter, setScanTypeFilter] = useState('All scan types');
   const [exporting, setExporting] = useState(false);
   const [message, setMessage] = useState('');
@@ -37,7 +38,7 @@ export function HistoryPage() {
     setExporting(true); setMessage('');
     try { setMessage((await generateReport('markdown')).message); } catch { setMessage('History export failed. Check the local API and try again.'); } finally { setExporting(false); }
   };
-  return <div className="content-stack"><PageHeader eyebrow="Activity" title="Scan history" description="Recorded scan runs, including clean scans and partial coverage." action={<button className="button button-secondary" onClick={() => void exportHistory()} disabled={exporting}>{exporting ? <><RefreshCw size={15} className="spin" />Exporting…</> : <><Download size={15} />Export history</>}</button>} />{message && <div className="toast" role="status"><CheckCircle2 size={17} />{message}</div>}<div className="panel table-panel"><div className="table-meta"><span><strong>Recent scans</strong></span><div className="filter-group"><select aria-label="Filter scan type" value={scanTypeFilter} onChange={event => setScanTypeFilter(event.target.value)}><option>All scan types</option><option>IaC Config Audit</option><option>SSRF Web Audit</option></select></div></div><div className="table-scroll"><table className="findings-table history-table"><thead><tr><th>Target</th><th>Scan type</th><th>Findings</th><th>Status</th><th>Run time</th></tr></thead><tbody>{scans.filter(scan => scanTypeFilter === 'All scan types' || scan.type === scanTypeFilter).map((scan) => <tr key={scan.id}><td><div className="finding-cell"><div className="finding-icon blue"><GitBranch size={15} /></div><div><strong>{scan.target}</strong><span>{scan.id} · {scan.duration}</span></div></div></td><td><span className="muted">{scan.type}</span></td><td><span className={scan.findings ? 'finding-count' : 'finding-count clean'}>{scan.findings || 'Clean'}</span></td><td><span className="status-badge fixed"><span />{scan.status}</span></td><td>{scan.time}</td></tr>)}</tbody></table></div></div></div>;
+  return <div className="content-stack"><PageHeader eyebrow="Activity" title="Scan history" description="Recorded scan runs, including clean scans and partial coverage." action={<button className="button button-secondary" onClick={() => void exportHistory()} disabled={exporting}>{exporting ? <><RefreshCw size={15} className="spin" />Exporting…</> : <><Download size={15} />Export history</>}</button>} />{message && <div className="toast" role="status"><CheckCircle2 size={17} />{message}</div>}<div className="panel table-panel"><div className="table-meta"><span><strong>Recent scans</strong></span><div className="filter-group"><select aria-label="Filter scan type" value={scanTypeFilter} onChange={event => setScanTypeFilter(event.target.value)}><option>All scan types</option><option>IaC Config Audit</option><option>SSRF Web Audit</option></select></div></div><div className="table-scroll"><table className="findings-table history-table"><thead><tr><th>Target</th><th>Scan type</th><th>Findings</th><th>Status</th><th>Run time</th></tr></thead><tbody>{scans.filter(scan => scanTypeFilter === 'All scan types' || scan.type === scanTypeFilter).map((scan) => <tr key={scan.id}><td><div className="finding-cell"><div className="finding-icon blue"><GitBranch size={15} /></div><div><strong>{scan.target}</strong><span>{scan.id} · {scan.duration}</span><CoveragePanel coverage={scan.coverage} scanId={scan.id} status={scan.status}/></div></div></td><td><span className="muted">{scan.type}</span></td><td><span className={scan.findings_count ? 'finding-count' : 'finding-count clean'}>{scan.findings_count}</span></td><td><span className={`status-badge ${scan.status === 'completed' ? 'resolved' : 'open'}`}><span />{scan.status}</span></td><td>{scan.time}</td></tr>)}</tbody></table></div></div></div>;
 }
 
 export function ReportsPage() {

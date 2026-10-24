@@ -1,24 +1,25 @@
 import { useCallback,useEffect,useState } from 'react';
 import { fetchFindings,fetchScanHistory } from '../api';
 import { normalizeFinding,type Finding } from '../types';
+import type {ScanRun} from '../types';
 
 export function useFindings() {
   const [findings, setFindings] = useState<Finding[]>([]);
   const [coverage, setCoverage] = useState('Scan coverage unavailable. Run a scan to evaluate supported rules.');
   const [findingError, setFindingError] = useState('');
-  const reloadFindings = useCallback(async () => {
-    try {
-      const [response, history] = await Promise.all([fetchFindings(), fetchScanHistory()]);
+  const [latestScan, setLatestScan] = useState<ScanRun | null>(null);
+  const [loading, setLoading] = useState(true);
+  const reloadFindings = useCallback(() => Promise.all([fetchFindings(), fetchScanHistory()]).then(([response, history]) => {
       setCoverage(describeCoverage(history.scans));
+      setLatestScan(history.scans[0] ?? null);
       setFindings(response.findings.map(normalizeFinding));
       setFindingError('');
-    } catch { setFindingError('Persisted findings unavailable. Reconnect the local API.'); }
-  }, []);
+    }).catch(() => setFindingError('Persisted findings unavailable. Reconnect the local API.'))
+    .finally(() => setLoading(false)), []);
   useEffect(() => {
-    void Promise.all([fetchFindings(), fetchScanHistory()]).then(([response, history]) => { setFindings(response.findings.map(normalizeFinding)); setCoverage(describeCoverage(history.scans)); })
-      .catch(() => setFindingError('Persisted findings unavailable. Reconnect the local API.'));
-  }, []);
-  return { findings, setFindings, reloadFindings, findingError, coverage };
+    void reloadFindings();
+  }, [reloadFindings]);
+  return { findings, setFindings, reloadFindings, findingError, coverage, latestScan, loading };
 }
 
 function describeCoverage(scans: Array<{status:string;coverage:Array<{status:string}>}>) {

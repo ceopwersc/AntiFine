@@ -55,6 +55,9 @@ def analyze(content, filename):
                 spec = mapping(spec).get(key)
             spec = mapping(spec)
             base = f"yaml/{doc_index}/" + "/".join(path)
+            document_name = mapping(doc.get('metadata')).get('name', f'document-{doc_index + 1}')
+            if not isinstance(document_name, str):
+                raise ValueError('Kubernetes metadata.name must be text')
             pod_ctx = mapping(spec.get("securityContext"))
             for flag in ("hostPID", "hostIPC", "hostNetwork"):
                 if flag in spec and not isinstance(spec[flag], bool):
@@ -71,7 +74,8 @@ def analyze(content, filename):
                     line = 1
                 findings.append(Finding(title + f" in {filename}", severity, filename,
                     frameworks=frameworks, remediation=advice, rule_id=rule,
-                    resource=pointer, line=line, remediation_eligible=eligible))
+                    resource=pointer, resource_label=f"{doc['kind']}/{document_name}: {pointer}",
+                    line=line, remediation_eligible=eligible))
 
             flags = [key for key in ("hostPID", "hostIPC", "hostNetwork") if spec.get(key) is True]
             if flags:

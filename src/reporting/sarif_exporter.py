@@ -21,6 +21,7 @@ SARIF_LEVEL_MAP = {
     "MEDIUM": "warning",
     "LOW": "note",
     "INFO": "note",
+    'INFORMATIONAL': 'note',
     "UNCLASSIFIED": "note"
 }
 
@@ -42,6 +43,7 @@ def export_to_sarif(output_file: str, db_path: Path = DB_PATH) -> int:
             "target": record.target_path,
             "rule_id": record.rule_id, "id": record.finding_id, "line": record.source_line, "column": record.source_column,
             "end_line": record.end_line, "scan_id": record.scan_id, "resource": record.resource,
+            'resource_label': record.resource_label, 'family': record.family, 'evidence': record.evidence,
         }
         for record in records
     ])
@@ -56,7 +58,7 @@ def export_to_sarif(output_file: str, db_path: Path = DB_PATH) -> int:
         print(f"[error] Could not write SARIF report to {output_file}: {exc}", file=sys.stderr)
         return 1
 
-def generate_sarif(findings: list[dict[str, Any]], *, coverage: list | None = None) -> dict[str, Any]:
+def generate_sarif(findings: list[dict[str, Any]], *, coverage: list | None = None, remediations: list | None = None) -> dict[str, Any]:
     """Generate a SARIF JSON object conforming to OASIS SARIF v2.1.0."""
     rules = []
     results = []
@@ -116,7 +118,9 @@ def generate_sarif(findings: list[dict[str, Any]], *, coverage: list | None = No
             "properties": {
                 "frameworks": frameworks,
                 "remediation": remediation,
-                "finding_id": finding.get("id", ""), "scan_id": finding.get("scan_id", ""), "resource": finding.get("resource", "unknown")
+                "finding_id": finding.get("id", ""), "scan_id": finding.get("scan_id", ""), "resource": finding.get("resource", "unknown"),
+                'resource_label': sanitize_text(finding.get('resource_label', 'unknown')),
+                'evidence': sanitize_text(finding.get('evidence', '')), 'family': finding.get('family', 'unknown')
             }
         })
 
@@ -133,7 +137,7 @@ def generate_sarif(findings: list[dict[str, Any]], *, coverage: list | None = No
                     }
                 },
                 "results": results,
-                "properties": {"scan_coverage": coverage or [], "compliance_status": "Not evaluated"}
+                "properties": {"scan_coverage": coverage or [], 'remediation_history': remediations or [], "compliance_status": "Not evaluated"}
             }
         ]
     }

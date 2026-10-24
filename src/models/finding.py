@@ -40,12 +40,21 @@ class Finding:
     scan_id: str = ""
     remediation_eligible: bool = False
     status: str = "OPEN"
+    family: str = ""
+    resource_key: str = ""
+    resource_label: str = ""
+    evidence: str = ""
 
     def __post_init__(self) -> None:
         from src.services.secret_boundary import sanitize_path, sanitize_text
+        from src.scanners.rule_catalog import details, family
+        explanation, evidence = details(self.rule_id)
+        self.family = family(self.rule_id)
+        self.resource_label = sanitize_text(self.resource_label or self.resource, limit=512)
+        self.evidence = sanitize_text(self.evidence or evidence, limit=2000)
         self.rule_name = sanitize_text(self.rule_name, limit=1000)
         self.filename = sanitize_path(self.filename)
-        self.description = sanitize_text(self.description, limit=4000)
+        self.description = sanitize_text(self.description or explanation, limit=4000)
         self.remediation = sanitize_text(self.remediation, limit=4000)
         self.frameworks = [sanitize_text(x, limit=512) for x in self.frameworks]
     @property

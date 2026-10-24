@@ -4,10 +4,10 @@ import uuid
 import hashlib
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool
 from starlette.concurrency import run_in_threadpool
 from src.services.filesystem import BoundaryError, relative_target
-from src.services.settings import workspace_root, database_path, data_root
+from src.services.settings import workspace_root, database_path, data_root, PROJECT_ROOT
 from src.services.workspaces import store_uploads, resolve_workspace
 from src.services.scan_repository import ScanRepository
 from src.services.scanning import scan_target
@@ -31,6 +31,33 @@ class FixRequest(BaseModel):
     preview_id: str | None = Field(default=None, max_length=128)
     target_path: str | None = None
     rule_name: str | None = None
+
+
+class ApplyRequest(FixRequest):
+    approved: StrictBool
+
+
+def _demo_workspace() -> str:
+    import io
+    import json
+    from src.services.filesystem import read_source
+    root = PROJECT_ROOT / 'examples' / 'terraform-workflow'
+    names = ['dev/main.tf', 'prod/main.tf']
+    uploads = [UploadFile(io.BytesIO(read_source(root, root / name)), filename=name.split('/')[-1]) for name in names]
+    try:
+        return store_uploads(uploads, json.dumps(names))
+    finally:
+        for upload in uploads:
+            upload.file.close()
+
+
+@router.post('/api/scan/demo')
+async def demo() -> dict:
+    try:
+        identifier = await run_in_threadpool(_demo_workspace)
+        return {'target_path': identifier, 'workspace_id': identifier}
+    except (OSError, ValueError):
+        raise HTTPException(422, 'Demo unavailable or private import quota reached; import a supported project instead.') from None
 
 
 @router.post("/api/scan/upload")
@@ -71,6 +98,31 @@ async def findings():
     return {"findings": await run_in_threadpool(repository().findings)}
 
 
+def _rescan_finding(finding_id: str) -> dict:
+    from src.services.scanning import locate_file
+    repo = repository()
+    matches = [value for value in repo.findings() if value['id'] == finding_id]
+    if len(matches) != 1:
+        raise ValueError('Unknown finding')
+    metadata = matches[0]
+    root = remediation_service.source_root(metadata['workspace_id'])
+    path = locate_file(root, metadata['workspace_id'], metadata['file_id'])
+    run, values = scan_target(root, path, metadata['workspace_id'], repo)
+    return {'status': run['status'], 'target': run['target'], 'scan_id': run['id'],
+        'findings_count': len(values), 'findings': [asdict(f) | {'file': f.filename} for f in values],
+        'coverage': run['coverage'], 'summary': 'Source re-evaluated using backend file identity. No source edit was requested.'}
+
+
+@router.post('/api/findings/{finding_id}/rescan')
+async def rescan_finding(finding_id: str) -> dict:
+    try:
+        if len(finding_id) > 128:
+            raise ValueError('Invalid identity')
+        return await run_in_threadpool(_rescan_finding, finding_id)
+    except (OSError, ValueError):
+        raise HTTPException(422, 'Source unavailable; import or select an authorized project and scan again.') from None
+
+
 @router.get("/api/findings/secrets")
 async def secret_findings():
     values = await run_in_threadpool(repository().findings, open_only=True)
@@ -80,6 +132,11 @@ async def secret_findings():
 @router.get("/api/scan/history")
 async def history():
     return {"status": "ok", "scans": await run_in_threadpool(repository().history)}
+
+
+@router.get('/api/remediations')
+async def remediation_history() -> dict:
+    return {'remediations': await run_in_threadpool(repository().remediations)}
 
 
 @router.get("/api/dashboard")
@@ -110,11 +167,11 @@ async def preview(req: FixRequest):
 
 
 @router.post("/api/scan/iac/remediate")
-async def apply(req: FixRequest):
-    if not req.finding_id or not req.preview_id:
-        raise HTTPException(422, "Apply requires finding_id and preview_id from a current preview")
+async def apply(req: ApplyRequest):
+    if not req.finding_id or not req.preview_id or req.approved is not True:
+        raise HTTPException(422, "Apply requires finding_id, a current preview_id and approved: true")
     try:
-        return await run_in_threadpool(remediation_service.apply, repository(), req.finding_id, req.preview_id)
+        return await run_in_threadpool(remediation_service.apply, repository(), req.finding_id, req.preview_id, approved=req.approved)
     except (ValueError, OSError):
         raise HTTPException(409, "Apply rejected: stale/concurrent source, invalid preview, or failed verification. Rescan and review again.") from None
 
@@ -123,7 +180,8 @@ async def apply(req: FixRequest):
 async def sarif():
     values = await run_in_threadpool(repository().findings, open_only=True)
     runs = await run_in_threadpool(repository().history)
-    return generate_sarif([f | {"vulnerability_type": f["rule_name"], "target": f["file"]} for f in values], coverage=runs)
+    events = await run_in_threadpool(repository().remediations)
+    return generate_sarif([f | {"vulnerability_type": f["rule_name"], "target": f["file"]} for f in values], coverage=runs, remediations=events)
 
 
 @router.post("/api/report/generate")

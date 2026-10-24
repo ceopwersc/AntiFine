@@ -625,3 +625,25 @@ h1 { font-size: 20px; line-height: 28px; letter-spacing: 0; }
   .finding-toolbar { flex-direction: column; align-items: stretch; }
   .detail-drawer { width: 100%; max-width: 100%; }
 }
+.coverage-panel { padding: 16px; margin-bottom: 16px; min-width: 0; }
+.coverage-panel summary { cursor: pointer; font-weight: 600; }
+.coverage-panel p { color: var(--text-secondary, #9da7b5); font-size: 12px; overflow-wrap: anywhere; }
+.coverage-panel code, .finding-reference, .preview-version code { overflow-wrap: anywhere; white-space: normal; }
+.finding-reference { display: block; max-width: 240px; font-size: 10px; color: #9da7b5; margin-top: 6px; }
+.finding-toolbar, .finding-toolbar .filter-group { flex-wrap: wrap; min-width: 0; }
+.finding-toolbar select { max-width: 210px; }
+.status-badge.resolved { color: #6dd9a2; background: #153227; }
+.diff-view.unified-diff { display: block; max-height: 320px; overflow: auto; padding: 16px; background: var(--panel, #101318); }
+.unified-diff pre { margin: 0; font-size: 12px; line-height: 1.7; white-space: pre; }
+.diff-added { color: #8ee5b0; background: #183526; }
+.diff-removed { color: #f4a6a6; background: #402328; }
+.preview-version, .preview-conditions { padding: 0 24px; font-size: 12px; overflow-wrap: anywhere; }
+.preview-conditions { margin-left: 16px; }
+.approval-control { display: flex; align-items: flex-start; gap: 12px; margin: 16px 24px; padding: 16px; background: #19232f; border-radius: 6px; font-size: 13px; }
+.approval-control input { width: 18px; height: 18px; flex-shrink: 0; accent-color: #649af4; }
+.queue-row strong, .modal-header code, .drawer-section code { overflow-wrap: anywhere; }
+.queue-row > div { min-width: 0; }
+.scan-finding-result { display: flex; gap: 10px; padding: 12px; width: 100%; margin-top: 8px; border: 1px solid #293341; background: #151b23; color: inherit; text-align: left; }
+.history-table .coverage-panel { margin-top: 10px; max-width: 700px; }
+@media (max-width: 900px) { .finding-toolbar .filter-group { width: 100%; } .finding-toolbar select { max-width: 175px; } }
+.workstation-table .rule-id, .workstation-table td > strong { display: block; margin-bottom: 4px; }

@@ -1,4 +1,3 @@
-import {findingTechnology,renderExplanation} from './utils/findingPresentation';
 import { AnimatePresence,motion } from 'framer-motion';
 import {
 ArrowUpRight,
@@ -7,7 +6,6 @@ CheckCircle2,
 ChevronDown,
 ChevronRight,
 Clock3,
-Copy,
 Download,
 FileCheck2,
 FileText,
@@ -18,24 +16,22 @@ MessageSquareText,
 Play,
 Radar,
 RefreshCw,
-Search,
 Settings2,
 ShieldAlert,
 ShieldCheck,
-SlidersHorizontal,
-Sparkles,
-X
 } from 'lucide-react';
 import { useEffect,useMemo,useState,type ReactNode } from 'react';
-import { explainFinding,fetchAIHealth,fetchDashboardStats,fetchScanHistory,generateReport,type AskContext,type FindingExplanation } from './api';
+import { fetchAIHealth,fetchDashboardStats,fetchScanHistory,generateReport,type AskContext,type FindingExplanation } from './api';
 import { HistoryPage,ReportsPage,SecretsPage,SettingsPage } from './components/ActivityPages';
 import { AskAntiFinePage } from './components/AskAntiFine';
 import { ScanWorkspace } from './components/ScanWorkspace';
 import {PageHeader,SeverityBadge} from './components/WorkstationUI';
 
 import { RemediationModal } from './components/RemediationModal';
-import { useDialog } from './hooks/useDialog';
 import { useFindings } from './hooks/useFindings';
+import {FindingsPanel} from './components/FindingsPanel';
+import {FindingDrawer} from './components/FindingDrawer';
+import {CoveragePanel} from './components/CoveragePanel';
 import type { Page } from './types';
 import { type Finding,type Severity } from './types';
 const navGroups = [
@@ -187,65 +183,6 @@ function Overview({ findings, onNavigate, onSelect }: { findings: Finding[]; onN
   </div>;
 }
 
-function FindingsPage({ findings, onSelect }: { findings: Finding[]; onSelect: (finding: Finding) => void }) {
-  const [query, setQuery] = useState('');
-  const [severity, setSeverity] = useState<Severity | 'All'>('All');
-  const [status, setStatus] = useState<'All' | Finding['status']>('All');
-  const [sortBy, setSortBy] = useState<'severity' | 'file' | 'status'>('severity');
-  const severityOrder: Record<Severity, number> = { Critical: 0, High: 1, Medium: 2, Low: 3, Informational: 4, Unknown: 5 };
-  const filtered = findings
-    .filter((finding) => (severity === 'All' || finding.severity === severity) && (status === 'All' || finding.status === status) && `${finding.id} ${finding.rule_name} ${finding.file} ${finding.frameworks.join(' ')}`.toLowerCase().includes(query.toLowerCase()))
-    .sort((left, right) => sortBy === 'severity'
-      ? severityOrder[left.severity] - severityOrder[right.severity]
-      : sortBy === 'file'
-        ? left.file.localeCompare(right.file)
-        : left.status.localeCompare(right.status));
-  return <div className="content-stack workstation-findings"><PageHeader eyebrow="Finding queue" title="Findings" description="Deterministic findings, code locations, and review state." /><div className="finding-workflow"><span>Finding</span><ChevronRight size={13} /><span>Code</span><ChevronRight size={13} /><span>Rule</span><ChevronRight size={13} /><span>Compliance</span><ChevronRight size={13} /><span>Remediation</span><ChevronRight size={13} /><span>Diff</span><ChevronRight size={13} /><span>Apply</span><ChevronRight size={13} /><span>Rescan</span></div><div className="finding-toolbar"><div className="search-input"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search rule IDs, files, paths, frameworks" /><kbd>⌘ K</kbd></div><div className="filter-group"><SlidersHorizontal size={15} className="muted" /><select value={severity} onChange={(event) => setSeverity(event.target.value as Severity | 'All')} aria-label="Filter by severity"><option value="All">All severities</option><option>Critical</option><option>High</option><option>Medium</option><option>Low</option><option>Informational</option><option>Unknown</option></select><select value={status} onChange={(event) => setStatus(event.target.value as 'All' | Finding['status'])} aria-label="Filter by status"><option value="All">All status</option><option>Open</option><option>Fixed</option><option>Accepted</option></select><select value={sortBy} onChange={(event) => setSortBy(event.target.value as typeof sortBy)} aria-label="Sort findings"><option value="severity">Sort: severity</option><option value="file">Sort: file</option><option value="status">Sort: status</option></select></div></div><div className="panel table-panel"><div className="table-meta"><span><strong>{filtered.length}</strong> findings in current scan</span><span><span className="live-text">LOCAL DATA</span></span></div><div className="table-scroll"><table className="findings-table workstation-table"><thead><tr><th>Severity</th><th>Rule / finding</th><th>Code location</th><th>Framework</th><th>Evidence</th><th>Status</th><th aria-label="Actions" /></tr></thead><tbody>{filtered.map((finding) => <tr key={finding.id} tabIndex={0} role="button" onClick={() => onSelect(finding)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(finding); } }}><td><SeverityBadge severity={finding.severity} /></td><td><div className="finding-cell"><div><code className="rule-id">{finding.id}</code><strong>{finding.rule_name}</strong></div></div></td><td><code>{finding.file}</code><span className="line-number">:{finding.line}</span><pre className="table-code">{finding.before.split('\n')[0]}</pre></td><td><span className="framework-pill">{finding.framework}</span></td><td><span className="evidence-text">detected {finding.detected}</span></td><td><span className={`status-badge ${finding.status.toLowerCase()}`}><span />{finding.status}</span></td><td><ChevronRight size={15} className="muted" /></td></tr>)}</tbody></table></div>{filtered.length === 0 && <div className="empty-state"><Search size={22} /><strong>No findings match these filters</strong><span>Try a rule ID, file path, or framework.</span></div>}<div className="table-footer"><span>Showing {filtered.length} of {findings.length} · click a row to inspect code and remediation</span><div><button className="pagination-button" disabled>Previous</button><button className="pagination-button active">1</button><button className="pagination-button" disabled>Next</button></div></div></div></div>;
-}
-
-function FindingDrawer({
-  finding,
-  onClose,
-  onRemediate,
-  onAsk,
-  explanationCache,
-  onExplanation,
-}: {
-  finding: Finding;
-  onClose: () => void;
-  onRemediate: () => void;
-  onAsk: () => void;
-  explanationCache: Record<string, FindingExplanation>;
-  onExplanation: (findingId: string, explanation: FindingExplanation) => void;
-}) {
-  const [copied, setCopied] = useState(false);
-  const [loadingAI, setLoadingAI] = useState(false);
-  const [aiError, setAIError] = useState('');
-  const explanation = explanationCache[finding.id];
-  useDialog(onClose);
-  const deterministicFixAvailable = finding.remediation_eligible;
-  const copy = () => { void navigator.clipboard?.writeText(finding.remediation); setCopied(true); window.setTimeout(() => setCopied(false), 1500); };
-  const requestExplanation = async () => {
-    setLoadingAI(true); setAIError('');
-    try {
-      const result = await explainFinding({
-        id: finding.id,
-        rule_name: finding.rule_name,
-        severity: finding.severity.toUpperCase(),
-        filename: finding.file,
-        frameworks: finding.frameworks,
-        remediation: finding.remediation,
-        description: finding.description,
-      }, finding.before);
-      onExplanation(finding.id, result);
-    } catch (error: any) {
-      const detail = error?.response?.data?.detail;
-      setAIError(detail || 'Local AI unavailable');
-    } finally { setLoadingAI(false); }
-  };
-  return <><motion.button className="drawer-scrim" onClick={onClose} aria-label="Close finding details" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} /><motion.aside className="detail-drawer" role="dialog" aria-modal="true" aria-label="Finding details" tabIndex={-1} initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: 'spring', damping: 28, stiffness: 260 }}><div className="drawer-header"><div><span className="drawer-eyebrow">Finding <code>{finding.id}</code></span><h2>{finding.rule_name}</h2><div className="drawer-meta-line"><span>{findingTechnology(finding.file)}</span><span>{finding.file}:{finding.line}</span></div></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={19} /></button></div><div className="drawer-content"><div className="drawer-badges"><SeverityBadge severity={finding.severity} /><span className={`status-badge ${finding.status.toLowerCase()}`}><span />{finding.status}</span></div><section className="drawer-section"><h3>Detection</h3><p>{finding.description}</p></section><section className="drawer-section"><h3>Code</h3><div className="drawer-code"><div><span>{finding.file}</span><span>line {finding.line}</span></div><pre>{finding.before}</pre></div></section><section className="drawer-section"><h3>Compliance mapping</h3><div className="framework-list">{finding.frameworks.length ? finding.frameworks.map((framework) => <span key={framework} className="framework-pill">{framework}</span>) : <span className="muted">No authoritative mapping supplied</span>}</div></section><section className="drawer-section remediation-preview"><div className="section-heading-row"><h3>Deterministic remediation</h3>{deterministicFixAvailable && <button className="text-button" onClick={copy}>{copied ? <><Check size={13} />Copied</> : <><Copy size={13} />Copy</>}</button>}</div><p>{finding.remediation || 'No deterministic remediation available.'}</p>{finding.after && <pre>{finding.after}</pre>}</section><section className="drawer-section ai-explanation" aria-live="polite"><div className="section-heading-row"><div><h3>Local AI</h3><span className="ai-label">Ollama · secondary explanation</span></div>{explanation && <button className="text-button" onClick={() => void requestExplanation()} disabled={loadingAI}>{loadingAI ? 'Analyzing locally…' : 'Regenerate'}</button>}</div><p className="ai-disclaimer">AI explains the deterministic finding; it does not change the rule result or remediation.</p>{aiError ? <div className="ai-error"><strong>Local AI unavailable</strong><span>AntiFine's deterministic security analysis is still available.</span><button className="text-button" onClick={() => void requestExplanation()} disabled={loadingAI}>Retry</button></div> : explanation ? <div className="ai-response"><span className="ai-model">{explanation.model} · generated locally</span>{renderExplanation(explanation.explanation)}</div> : <button className="button button-secondary ai-explain-button" onClick={() => void requestExplanation()} disabled={loadingAI}>{loadingAI ? <><RefreshCw size={15} className="spin" />Analyzing locally…</> : <><Sparkles size={15} />Explain with Local AI</>}</button>}<button className="button button-secondary ai-ask-button" onClick={onAsk}><MessageSquareText size={14} />Ask AntiFine about this</button></section></div><div className="drawer-footer"><button className="button button-secondary" onClick={onClose}>Close</button>{deterministicFixAvailable && finding.status === 'Open' && <button className="button button-primary" onClick={onRemediate}><Sparkles size={15} />Review fix</button>}</div></motion.aside></>;
-}
-
 function CompliancePage({ findings }: { findings: Finding[] }) {
   const mappings = Array.from(new Set(findings.flatMap((finding) => finding.frameworks))).sort();
   const [exporting, setExporting] = useState(false);
@@ -265,13 +202,13 @@ function CompliancePage({ findings }: { findings: Finding[] }) {
 export default function App() {
   const [page, setPage] = useState<Page>(() => { const stored = sessionStorage.getItem('antifine-page'); return ['overview','scan','findings','compliance','secrets','history','reports','ai','settings'].includes(stored ?? '') ? stored as Page : 'overview'; });
   useEffect(() => { sessionStorage.setItem('antifine-page', page); }, [page]);
-  const { findings, setFindings, reloadFindings, findingError, coverage } = useFindings();
+  const { findings, setFindings, reloadFindings, findingError, coverage, latestScan, loading } = useFindings();
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
   const [remediationFinding, setRemediationFinding] = useState<Finding | null>(null);
   const [explanationCache, setExplanationCache] = useState<Record<string, FindingExplanation>>({});
   const [assistantContext, setAssistantContext] = useState<AskContext>();
   const [assistantQuestion, setAssistantQuestion] = useState('');
-  const [target, setTarget] = useState('infra/production.tf');
+  const [target, setTarget] = useState('examples/terraform-workflow');
   const selectFinding = (finding: Finding) => { sessionStorage.setItem('antifine-selected', finding.id); setSelectedFinding(finding); };
   useEffect(() => { const id = sessionStorage.getItem('antifine-selected'); if (id) { const current = findings.find(f => f.id === id); if (current) Promise.resolve().then(() => setSelectedFinding(current)); } }, [findings]);
   const askAboutFinding = (finding: Finding) => {
@@ -294,7 +231,7 @@ export default function App() {
     setSelectedFinding(null);
     setPage('ai');
   };
-  const completeScan = (nextFindings: Finding[]) => { setFindings(nextFindings); setPage('findings'); };
+  const completeScan = async (nextFindings: Finding[]) => { setFindings(nextFindings); setPage('findings'); await reloadFindings(); };
   const markApplied = () => { sessionStorage.removeItem('antifine-selected'); void reloadFindings(); setSelectedFinding(null); };
-  return <AppShell page={page} setPage={(nextPage) => { if (nextPage !== 'ai') { setAssistantContext(undefined); setAssistantQuestion(''); } setPage(nextPage); }}>{findingError && <div role="alert">{findingError}</div>}<p className="coverage-notice" role="status">{coverage}</p><AnimatePresence mode="wait"><motion.div key={page} className="page-transition" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.16 }}>{page === 'overview' && <Overview findings={findings} onNavigate={setPage} onSelect={selectFinding} />}{page === 'scan' && <ScanWorkspace onComplete={completeScan} onViewFindings={() => setPage('findings')} onOpenFinding={selectFinding} target={target} setTarget={setTarget} />}{page === 'findings' && <FindingsPage findings={findings} onSelect={selectFinding} />}{page === 'compliance' && <CompliancePage findings={findings} />}{page === 'secrets' && <SecretsPage />}{page === 'history' && <HistoryPage />}{page === 'reports' && <ReportsPage />}{page === 'ai' && <AskAntiFinePage context={assistantContext} initialQuestion={assistantQuestion} onClearContext={() => { setAssistantContext(undefined); setAssistantQuestion(''); }} onNewChat={() => { setAssistantContext(undefined); setAssistantQuestion(''); }} />}{page === 'settings' && <SettingsPage onNavigate={setPage} />}</motion.div></AnimatePresence><AnimatePresence>{selectedFinding && !remediationFinding && <FindingDrawer finding={selectedFinding} onClose={() => { sessionStorage.removeItem('antifine-selected'); setSelectedFinding(null); }} onRemediate={() => setRemediationFinding(selectedFinding)} onAsk={() => askAboutFinding(selectedFinding)} explanationCache={explanationCache} onExplanation={(id, result) => setExplanationCache((current) => ({ ...current, [id]: result }))} />}{remediationFinding && <RemediationModal finding={remediationFinding} onClose={() => setRemediationFinding(null)} onApplied={markApplied} />}</AnimatePresence></AppShell>;
+  return <AppShell page={page} setPage={(nextPage) => { if (nextPage !== 'ai') { setAssistantContext(undefined); setAssistantQuestion(''); } setPage(nextPage); }}>{findingError && <div className="modal-callout-error" role="alert">{findingError}<button className="button button-secondary" onClick={() => void reloadFindings()}>Retry loading evidence</button></div>}{loading && <p role="status">Loading persisted evidence…</p>}<p className="coverage-notice" role="status">{coverage}</p>{page === 'findings' && latestScan && <CoveragePanel coverage={latestScan.coverage} scanId={latestScan.id} status={latestScan.status}/>}<AnimatePresence mode="wait"><motion.div key={page} className="page-transition" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.16 }}>{page === 'overview' && <Overview findings={findings} onNavigate={setPage} onSelect={selectFinding} />}{page === 'scan' && <ScanWorkspace onComplete={completeScan} onViewFindings={() => setPage('findings')} onOpenFinding={selectFinding} target={target} setTarget={setTarget} />}{page === 'findings' && <FindingsPanel findings={findings} onSelect={selectFinding} />}{page === 'compliance' && <CompliancePage findings={findings} />}{page === 'secrets' && <SecretsPage />}{page === 'history' && <HistoryPage />}{page === 'reports' && <ReportsPage />}{page === 'ai' && <AskAntiFinePage context={assistantContext} initialQuestion={assistantQuestion} onClearContext={() => { setAssistantContext(undefined); setAssistantQuestion(''); }} onNewChat={() => { setAssistantContext(undefined); setAssistantQuestion(''); }} />}{page === 'settings' && <SettingsPage onNavigate={setPage} />}</motion.div></AnimatePresence><AnimatePresence>{selectedFinding && !remediationFinding && <FindingDrawer finding={selectedFinding} onClose={() => { sessionStorage.removeItem('antifine-selected'); setSelectedFinding(null); }} onRemediate={() => setRemediationFinding(selectedFinding)} onAsk={() => askAboutFinding(selectedFinding)} explanationCache={explanationCache} onExplanation={(id, result) => setExplanationCache((current) => ({ ...current, [id]: result }))} />}{remediationFinding && <RemediationModal key={remediationFinding.id} finding={remediationFinding} onClose={() => setRemediationFinding(null)} onApplied={markApplied} />}</AnimatePresence></AppShell>;
 }

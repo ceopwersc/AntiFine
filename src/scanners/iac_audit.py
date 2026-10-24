@@ -303,6 +303,7 @@ def _walk_yaml_strings(obj: object, filename: str) -> list[Finding]:
             finding = scan_value_for_secrets(value, key, filename)
             if finding:
                 finding.resource = pointer
+                finding.resource_label = pointer
                 findings.append(finding)
     visit(obj)
     return findings
@@ -318,138 +319,8 @@ def analyze_kubernetes(content: str, filename: str) -> list[Finding]:
 # ── Terraform analysis ───────────────────────────────────────────────────────
 
 def analyze_terraform(content: str, filename: str) -> list[Finding]:
-    """Scan a Terraform file for security misconfigurations."""
-    findings: list[Finding] = []
-
-    import hcl2
-    try:
-        doc = hcl2.loads(content)
-    except Exception as exc:
-        findings.append(Finding(
-                            rule_id='parser.hcl',
-            rule_name=f"HCL Parse Error in {sanitize_path(filename)}",
-            severity="CRITICAL",
-            filename=filename,
-            frameworks=["Internal"],
-            remediation="Fix the HCL syntax before scanning.",
-            description=sanitize_text(exc, limit=2000),
-        ))
-        return findings
-
-    # Reuse the YAML string walker for entropy and embedded secrets
-    findings.extend(_walk_yaml_strings(doc, filename))
-
-    resources = doc.get("resource", [])
-    
-    s3_buckets = []
-    sse_configs = []
-    pab_configs = []
-    
-    resource_index = -1
-    for res_dict in resources:
-        for res_type_raw, instances in res_dict.items():
-            res_type = res_type_raw.strip('"\'')
-            for res_name_raw, res_config in instances.items():
-                resource_index += 1
-                res_name = res_name_raw.strip('"\'')
-                
-                if res_type == "aws_s3_bucket":
-                    s3_buckets.append((res_name, res_config))
-                elif res_type == "aws_s3_bucket_server_side_encryption_configuration":
-                    sse_configs.append((res_name, res_config))
-                elif res_type == "aws_s3_bucket_public_access_block":
-                    pab_configs.append((res_name, res_config))
-                
-                # a) Open Ingress Ports (CRITICAL)
-                if res_type in ("aws_security_group", "aws_security_group_rule"):
-                    ingress_rules = []
-                    if res_type == "aws_security_group_rule" and str(res_config.get("type", "")).strip('"\'') == "ingress":
-                        ingress_rules.append(res_config)
-                    elif res_type == "aws_security_group":
-                        ig = res_config.get("ingress", [])
-                        if isinstance(ig, list):
-                            ingress_rules.extend(ig)
-                        elif isinstance(ig, dict):
-                            ingress_rules.append(ig)
-                    
-                    for rule in ingress_rules:
-                        cidrs = list(rule.get("cidr_blocks", []) or []) + list(rule.get("ipv6_cidr_blocks", []) or [])
-                        cidrs_str = str(cidrs).replace('"', '').replace("'", "")
-                        if "0.0.0.0/0" in cidrs_str or "::/0" in cidrs_str:
-                            from_port = rule.get("from_port")
-                            to_port = rule.get("to_port")
-                            
-                            try:
-                                fp = int(from_port) if from_port is not None else None
-                                tp = int(to_port) if to_port is not None else None
-                            except (ValueError, TypeError):
-                                continue
-                                
-                            if fp is not None and tp is not None:
-                                protocol = str(rule.get("protocol", "tcp")).strip('"\'').lower()
-                                if protocol in ("-1", "all") or (protocol in ("tcp", "6") and ((fp <= 22 <= tp) or (fp <= 3389 <= tp))):
-                                    findings.append(Finding(
-                                                        rule_id='terraform.open-ingress',
-                                        rule_name=f"Open Ingress Port ({fp}-{tp}) to 0.0.0.0/0 in {filename}",
-                                        severity="CRITICAL",
-                                        filename=filename,
-                                        frameworks=["CIS AWS Foundations Benchmark 5.2", "PCI-DSS 4.0 Req 1.3.1"],
-                                        remediation="Restrict ingress cidr_blocks to specific trusted corporate CIDRs or bastion host."
-                                    ))
-
-                # c) Publicly Accessible Databases (CRITICAL)
-                if res_type == "aws_db_instance":
-                    if str(res_config.get("publicly_accessible", "")).lower() == "true":
-                        findings.append(Finding(
-                                            rule_id='terraform.public-database',
-                            resource=f'terraform/{resource_index}',
-                            line=terraform_attribute(content, f'terraform/{resource_index}', 'publicly_accessible')[2],
-                            remediation_eligible=True,
-                            rule_name=f"Publicly Accessible Database ({res_name}) in {filename}",
-                            severity="CRITICAL",
-                            filename=filename,
-                            frameworks=["CIS AWS Foundations Benchmark 2.3.1", "PCI-DSS 4.0 Req 1.3.2"],
-                            remediation="Set publicly_accessible = false and deploy the database inside private subnets."
-                        ))
-
-    # b) & d) Check S3 Buckets for SSE and PAB
-    for b_name, b_config in s3_buckets:
-        has_embedded_sse = "server_side_encryption_configuration" in b_config
-        has_companion_sse = False
-        for sse_name, sse_config in sse_configs:
-            bucket_ref = str(sse_config.get("bucket", ""))
-            if bucket_ref.strip('"') in (f"${{aws_s3_bucket.{b_name}.id}}", f"${{aws_s3_bucket.{b_name}.bucket}}", f"aws_s3_bucket.{b_name}.id", f"aws_s3_bucket.{b_name}.bucket"):
-                has_companion_sse = True
-                break
-                
-        if not (has_embedded_sse or has_companion_sse):
-            findings.append(Finding(
-                                rule_id='terraform.s3-encryption',
-                rule_name=f"Unencrypted S3 Storage ({b_name}) in {filename}",
-                severity="HIGH",
-                filename=filename,
-                frameworks=["CIS AWS Foundations Benchmark 2.1.1", "NIST SP 800-190 Section 3.3.4"],
-                remediation='resource "aws_s3_bucket_server_side_encryption_configuration" "example" {\n  bucket = aws_s3_bucket.example.id\n  rule {\n    apply_server_side_encryption_by_default {\n      sse_algorithm = "AES256"\n    }\n  }\n}'
-            ))
-            
-        has_pab = False
-        for pab_name, pab_config in pab_configs:
-            bucket_ref = str(pab_config.get("bucket", ""))
-            if bucket_ref.strip('"') in (f"${{aws_s3_bucket.{b_name}.id}}", f"${{aws_s3_bucket.{b_name}.bucket}}", f"aws_s3_bucket.{b_name}.id", f"aws_s3_bucket.{b_name}.bucket"):
-                has_pab = True
-                break
-                
-        if not has_pab:
-            findings.append(Finding(
-                                rule_id='terraform.s3-public-access',
-                rule_name=f"S3 Public Access Block Missing ({b_name}) in {filename}",
-                severity="HIGH",
-                filename=filename,
-                frameworks=["CIS AWS Foundations Benchmark 2.1.5"],
-                remediation='resource "aws_s3_bucket_public_access_block" "example" {\n  bucket = aws_s3_bucket.example.id\n  block_public_acls       = true\n  block_public_policy     = true\n  ignore_public_acls      = true\n  restrict_public_buckets = true\n}'
-            ))
-
-    return findings
+    from src.scanners.terraform_rules import analyze
+    return analyze(content, filename)
 
 
 # ── Generic Secrets analysis ──────────────────────────────────────────────────
@@ -517,7 +388,7 @@ def scan_file(filepath: Path) -> list[Finding]:
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
-def run_iac_audit(target_path: str, db_path: Path = DB_PATH, target_id: int = 1, persist: bool = True) -> list[Finding]:
+def run_iac_audit(target_path: str, db_path: Path = DB_PATH, target_id: int = 1, persist: bool = True, *, allow_unsupported: bool = False) -> list[Finding]:
     from src.services.scanning import scan_target, identity
     from src.services.scan_repository import ScanRepository
     path = Path(target_path).absolute()
@@ -526,6 +397,7 @@ def run_iac_audit(target_path: str, db_path: Path = DB_PATH, target_id: int = 1,
         run, findings = scan_target(root, path, "cli-" + identity(str(root)), ScanRepository(db_path) if persist else None)
     except (ValueError, OSError) as exc:
         raise IaCScannerError("Target could not be evaluated safely") from exc
-    if run["status"] != "completed" or not run["coverage"]:
+    explicit_supported_only = allow_unsupported and any(item['status'] == 'evaluated' for item in run['coverage']) and all(item['status'] in {'evaluated', 'unsupported'} for item in run['coverage']) and not run['listing_errors']
+    if (run["status"] != "completed" and not explicit_supported_only) or not run["coverage"]:
         raise IaCScannerError("Scan incomplete or unsupported; no security-gate pass is available")
     return findings
