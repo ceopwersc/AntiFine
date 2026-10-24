@@ -113,9 +113,9 @@ def terraform_blocks(content):
             and str(node.children[0].children[0]) == "resource"]
 
 
-def terraform_attribute(content, resource, attribute):
+def terraform_attribute(content, resource, attribute, *, blocks=None):
     index = int(resource.split("/")[1])
-    block = terraform_blocks(content)[index]
+    block = (blocks if blocks is not None else terraform_blocks(content))[index]
     bodies = [c for c in block.children if getattr(c, "data", "") == "body"]
     matches = [c for c in bodies[0].children
                if getattr(c, "data", "") == "attribute" and str(c.children[0].children[0]) == attribute]

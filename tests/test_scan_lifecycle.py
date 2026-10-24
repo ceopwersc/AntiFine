@@ -48,7 +48,8 @@ def test_legacy_migration_preserves_history(tmp_path):
     assert repo.findings()[0]['frameworks']==['CIS 1']
     assert repo.findings()[0]['remediation_eligible'] is False
     with sqlite3.connect(path) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0]==3
+        assert db.execute('PRAGMA user_version').fetchone()[0]==4
+        assert db.execute('SELECT COUNT(*) FROM remediation_runs').fetchone()[0] == 0
 
 
 def test_unsupported_input_cannot_pass_gate(tmp_path):

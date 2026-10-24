@@ -20,7 +20,7 @@ def test_exact_second_resource_and_immutable_backups(client):
     second=findings[1]
     preview=client.post('/api/scan/iac/remediation/preview',json={'finding_id':second['id']})
     assert preview.status_code==200, preview.text
-    r=client.post('/api/scan/iac/remediate',json={'finding_id':second['id'],'preview_id':preview.json()['preview_id']})
+    r=client.post('/api/scan/iac/remediate',json={'approved':True,'finding_id':second['id'],'preview_id':preview.json()['preview_id']})
     assert r.status_code==200, r.text
     assert r.json()['verified'] is False
     text=(workspace_root()/'main.tf').read_text()
@@ -30,7 +30,7 @@ def test_exact_second_resource_and_immutable_backups(client):
     assert backup1.read_text()==original
     remaining=r.json()['findings'][0]
     p=client.post('/api/scan/iac/remediation/preview',json={'finding_id':remaining['id']}).json()
-    fixed=client.post('/api/scan/iac/remediate',json={'finding_id':remaining['id'],'preview_id':p['preview_id']})
+    fixed=client.post('/api/scan/iac/remediate',json={'approved':True,'finding_id':remaining['id'],'preview_id':p['preview_id']})
     assert fixed.status_code==200 and fixed.json()['verified'] is True, fixed.text
     assert fixed.json()['backup_id'] != r.json()['backup_id']
     assert backup1.read_text()==original
@@ -41,7 +41,7 @@ def test_stale_preview_forged_title_and_unsupported_file(client):
     f=start(client)[0]
     p=client.post('/api/scan/iac/remediation/preview',json={'finding_id':f['id']}).json()
     target=workspace_root()/'main.tf';target.write_text(TF+'# concurrent edit\n')
-    assert client.post('/api/scan/iac/remediate',json={'finding_id':f['id'],'preview_id':p['preview_id']}).status_code==409
+    assert client.post('/api/scan/iac/remediate',json={'approved':True,'finding_id':f['id'],'preview_id':p['preview_id']}).status_code==409
     assert target.read_text().endswith('# concurrent edit\n')
     assert client.post('/api/scan/iac/remediate',json={'target_path':'main.tf','rule_name':'Publicly Accessible Database'}).status_code==422
     assert client.post('/api/scan/iac/remediation/preview',json={'finding_id':'fabricated'}).status_code==422
@@ -59,7 +59,7 @@ def test_import_nested_file_and_secret_boundaries(client):
     assert f['file']=='nested/main.tf'
     p=client.post('/api/scan/iac/remediation/preview',json={'finding_id':f['id']})
     assert p.status_code==200 and sentinel not in p.text
-    r=client.post('/api/scan/iac/remediate',json={'finding_id':f['id'],'preview_id':p.json()['preview_id']})
+    r=client.post('/api/scan/iac/remediate',json={'approved':True,'finding_id':f['id'],'preview_id':p.json()['preview_id']})
     assert r.status_code==200 and sentinel not in r.text and r.json()['verified'] is False
     assert sentinel not in Path(__import__('os').environ['ANTIFINE_DB_PATH']).read_bytes().decode('latin1')
 
@@ -74,10 +74,10 @@ def test_docker_manual_only_and_multiple_stages(client):
 
 
 def test_failed_verification_restores_original(client):
-    from src.services import remediation_service
+    from src.services import remediation_apply
     f=start(client)[0];p=client.post('/api/scan/iac/remediation/preview',json={'finding_id':f['id']}).json()
-    with patch.object(remediation_service,'scan_target',side_effect=ValueError('synthetic failure')):
-        r=client.post('/api/scan/iac/remediate',json={'finding_id':f['id'],'preview_id':p['preview_id']})
+    with patch.object(remediation_apply,'scan_target',side_effect=ValueError('synthetic failure')):
+        r=client.post('/api/scan/iac/remediate',json={'approved':True,'finding_id':f['id'],'preview_id':p['preview_id']})
     assert r.status_code==409
     assert (workspace_root()/'main.tf').read_text()==TF
 

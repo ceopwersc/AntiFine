@@ -6,7 +6,7 @@ import { runScan, generateReport, remediateFinding } from '../api';
 interface Finding {
   rule_name: string;
   severity: string;
-  compliance_framework: string;
+  compliance_framework?: string;
   frameworks: string[];
   description: string;
   remediation: string;

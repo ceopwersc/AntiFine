@@ -109,7 +109,7 @@ def test_compliance_labels_preserve_unicode_identifiers():
 
     docker = analyze_dockerfile('FROM alpine:3.20\nUSER root\nHEALTHCHECK NONE\n', 'Dockerfile')
     root = next(finding for finding in docker if finding.rule_id == 'docker.root-user')
-    secret = scan_value_for_secrets('token', 'ghp_' + 'a' * 36, 'synthetic.env')
+    secret = scan_value_for_secrets('ghp_' + 'a' * 36, 'token', 'synthetic.env')
     assert secret is not None
     for finding in (root, secret):
         assert 'NIST SP 800-190 §3.3.1' in finding.frameworks

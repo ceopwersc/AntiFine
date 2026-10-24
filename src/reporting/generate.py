@@ -122,6 +122,9 @@ class ScanRecord:
     end_line: int = 1
     scan_id: str = ""
     resource: str = "unknown"
+    resource_label: str = "unknown"
+    family: str = "unknown"
+    evidence: str = "Unavailable in legacy evidence; rescan."
 
     @property
     def compliance_frameworks(self) -> list[str]:
@@ -169,7 +172,9 @@ def fetch_scan_results(db_path: Path = DB_PATH) -> list[ScanRecord]:
                 timestamp=get("timestamp"),frameworks=tuple(sanitize_text(x) for x in mappings),
                 description_text=sanitize_text(get("description")),remediation_text=sanitize_text(get("remediation")),
                 rule_id=get("rule_id","legacy.unknown"),finding_id=get("finding_id"),target_path=sanitize_path(get("target_path","unknown")),
-                source_line=get("source_line",1),source_column=get("source_column",1),end_line=get("end_line",1),scan_id=get("scan_id"),resource=get("resource","unknown")))
+                source_line=get("source_line",1),source_column=get("source_column",1),end_line=get("end_line",1),scan_id=get("scan_id"),resource=get("resource","unknown"),
+                resource_label=sanitize_text(get('resource_label', get('resource', 'unknown'))), family=get('family', 'unknown'),
+                evidence=sanitize_text(get('evidence', 'Unavailable in legacy evidence; rescan.'))))
         return values
     except sqlite3.Error:
         raise ReportError("Could not load recorded evidence") from None
@@ -242,14 +247,23 @@ def render_report(
                 lines += ["## Scan coverage", "", "Mappings are metadata, not control certification. Unsupported, error and unevaluated files cannot establish a pass.", ""]
                 for scan_id, status, coverage in coverage_db.execute("SELECT id,status,coverage FROM scan_runs ORDER BY rowid DESC LIMIT 100"):
                     entries = json.loads(coverage)
-                    lines += [f"- Scan `{scan_id}`: {status}; " + ", ".join(f"{_escape_cell(v['file'])}: {v['status']}" for v in entries)]
+                    lines += [f"- Scan `{scan_id}`: {status}; " + ", ".join(f"{_escape_cell(v['file'])}: {v['status']} (families: {_escape_cell(', '.join(v.get('rule_families', []))) or 'none recorded'})" for v in entries)]
                 lines.append("")
+            if coverage_db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='remediation_runs'").fetchone():
+                lines += ['## Remediation verification', '', 'Approval and verification are recorded backend evidence. Backups remain private local source files.', '']
+                for details, recorded_at in coverage_db.execute('SELECT details,created_at FROM remediation_runs ORDER BY rowid DESC LIMIT 100'):
+                    event = json.loads(details)
+                    lines += [f"- {_escape_cell(recorded_at)}: {_escape_cell(event['status'])}; rule `{event['rule_id']}`; "
+                        f"file {_escape_cell(event['file'])}; resource {_escape_cell(event['resource_label'])}; "
+                        f"finding `{event['finding_id']}`; scan `{event.get('scan_id', '')}`; backup `{event['backup_id']}`; "
+                        f"approved: {event.get('approved', False)}; original resolved: {event.get('original_resolved', False)}; "
+                        f"file verified: {event.get('file_verified', False)}; introduced findings: {event.get('introduced_count', 0)}."]
+                lines.append('')
     if not records:
         lines += [
-            "No findings are recorded in the audit database.",
+            "No open findings are recorded. Review scan coverage and remediation evidence before making a security decision.",
             "",
-            "Run `python3 src/main.py --audit-local` to populate results, then "
-            "regenerate this report.",
+            "Evidence covers persisted deterministic scans and does not establish compliance certification.",
             "",
         ]
         return "\n".join(lines)
@@ -297,6 +311,8 @@ def render_report(
                 ""
             ]
             lines += [record.remediation, "",
+                f"Resource: {_escape_cell(getattr(record, 'resource_label', 'unknown'))}; family: {_escape_cell(getattr(record, 'family', 'unknown'))}.",
+                f"Observed evidence: {_escape_cell(getattr(record, 'evidence', 'Unavailable in legacy evidence; rescan.'))}", "",
                 f"Evidence: rule `{getattr(record, 'rule_id', 'legacy.unknown')}`; finding `{getattr(record, 'finding_id', '')}`; "
                 f"location `{_escape_cell(getattr(record, 'target_path', 'unknown'))}:{getattr(record, 'source_line', 1)}`; scan `{getattr(record, 'scan_id', '')}`.",
                 "", "---", ""]
