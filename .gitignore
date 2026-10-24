@@ -1,3 +1,4 @@
+# Local databases and journals
 antifine.db
 *.db
 *.db-wal
@@ -5,7 +6,16 @@ antifine.db
 *.db-journal
 *.sqlite
 *.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+*.sqlite3-wal
+*.sqlite3-shm
+*.sqlite3-journal
+
+# Python environments, bytecode, tooling, and coverage
 *.pyc
+*.pyo
 __pycache__/
 .pytest_cache/
 .venv/
@@ -16,6 +26,18 @@ build/
 *.egg-info/
 .mypy_cache/
 .tox/
+.ruff_cache/
+.pyright/
+.coverage
+.coverage.*
+htmlcov/
+coverage/
+
+# Frontend compiler output
+dist-ssr/
+*.tsbuildinfo
+
+# Credentials and private local state
 .env
 .env.*
 !.env.example
@@ -27,6 +49,20 @@ build/
 /test-results/
 /frontend/test-results/
 /frontend/playwright-report/
+/playwright-report/
+/blob-report/
+/frontend/blob-report/
+/playwright/.cache/
 /frontend/tests/e2e/.tmp/
 *.bak
 *.antifine-lock
+
+# Logs, editor backups, and disposable temporary files
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

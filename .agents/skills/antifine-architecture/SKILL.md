@@ -28,6 +28,8 @@ Python 3.12/3.14 and Node 24 are release-check targets. Install pinned `requirem
 
 Before release commits, review the index for credentials and generated/private artifacts and validate the selected source independently of unrelated local edits. Preserve unrelated changes; never force-push. Follow an explicit user-supplied commit message when one is provided.
 
+Repository hygiene decisions are recorded in `docs/REPOSITORY_CLEANUP.md`. Generated root reports are untracked while local originals are protected. Never equate ignored state with deletion permission: preserve databases, credentials, legacy uploads, source backups and ambiguous user tools/assets. Keep the maintained security/SARIF/browser suites and their synthetic fixtures.
+
 ## 3. API and safety contracts
 
 Uploads use `/api/scan/upload`; scan accepts an authorized relative target or private workspace ID. Preview requires `finding_id`; apply additionally requires `preview_id`. Title-based remediation must remain rejected. `verified` is true only after a complete zero-finding rescan. Preserve distinct INFORMATIONAL severity and explicit unsupported/error coverage.
