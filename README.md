@@ -169,6 +169,8 @@ Vite preview is a local bundle check, not a supported public production hosting 
 
 Server-local paths are relative to `ANTIFINE_WORKSPACE_ROOT`, defaulting to the repository root; `tests/fixtures` selects the example directory. HTTP clients cannot select arbitrary absolute paths outside that root. Containment checks reject escapes, symlinks, junctions/reparse points, and ambiguous Windows path components.
 
+Windows short-name aliases are compared using canonical paths after the original path has been checked for link/reparse traversal. This accepts equivalent authorized spellings while retaining containment and unsafe-name rejection.
+
 Directory discovery selects supported names/extensions and skips directories such as `.git`, virtual environments, `node_modules`, `dist`, and `build`. Unsupported directory entries are not an inventory of assessed files. A directly selected unsupported file has unsupported/error coverage.
 
 Responses distinguish `completed`, `partial`, and `error`, with per-file `evaluated`, `unsupported`, or `error` states. Completed scans can contain findings; an empty directory can be enumerated without evaluating a file. Read findings and coverage together. Neither case establishes compliance.

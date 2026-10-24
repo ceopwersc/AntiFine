@@ -16,17 +16,10 @@ def _validate_component(part: str):
         raise BoundaryError("Invalid path component")
 
 
-def contained(root: Path, path: Path, *, exists: bool = True) -> Path:
-    root = root.resolve(strict=True)
-    # Validate spelling before Windows GetFullPathName normalizes trailing dots.
-    for part in path.parts[1:] if path.anchor else path.parts:
-        _validate_component(part)
-    absolute = Path(os.path.abspath(path))
-    if not absolute.is_relative_to(root):
-        raise BoundaryError("Target must remain within its authorized workspace")
-    # Reject all link/reparse traversal, even links that currently resolve inside.
-    current = root
-    for part in absolute.relative_to(root).parts:
+def _reject_links(path: Path, *, exists: bool) -> None:
+    """Inspect the original spelling before resolving aliases or following links."""
+    current = Path(path.anchor)
+    for part in path.parts[1:]:
         _validate_component(part)
         current /= part
         try:
@@ -37,9 +30,21 @@ def contained(root: Path, path: Path, *, exists: bool = True) -> Path:
             continue
         if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
             raise BoundaryError("Links, junctions and reparse points are not scan targets")
+
+
+def contained(root: Path, path: Path, *, exists: bool = True) -> Path:
+    root = root.resolve(strict=True)
+    # Preserve raw component validation before Windows normalizes trailing dots.
+    for part in path.parts[1:] if path.anchor else path.parts:
+        _validate_component(part)
+    absolute = Path(os.path.abspath(path))
+    _reject_links(absolute, exists=exists)
+    # Windows 8.3 names are aliases, not links. Compare both canonical spellings
+    # only after ruling out reparse traversal on the original path.
     resolved = absolute.resolve(strict=exists)
     if not resolved.is_relative_to(root):
         raise BoundaryError("Target escaped its authorized workspace")
+    _reject_links(resolved, exists=exists)
     return resolved
 
 

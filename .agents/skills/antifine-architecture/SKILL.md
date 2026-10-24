@@ -15,6 +15,7 @@ Read `docs/CODEX_HANDOFF.md` and `docs/SECURITY_REMEDIATION.md` for the schema-v
 
 - FastAPI composes thin core/integration routes and optional AI endpoints. Local security middleware requires a per-launch capability and loopback/Host/Origin validation.
 - Private workspaces live outside web roots. Filesystem operations reject path escapes, links, junctions, reparse points and ambiguous Windows names, and revalidate reads/writes.
+- Windows short-name aliases are canonicalized only after checking original path components for reparse traversal. Real short-name and prefix-sibling filesystem regressions cover this boundary.
 - Scan workers have bounded bytes, nodes, depth, documents, file/finding counts, concurrency, wall time, CPU and memory. Deterministic findings have explicit rule IDs, file IDs, resource locators, source regions, digests and stable IDs.
 - SQLite schema v3 preserves legacy evidence, adds scan-run history, reconciles evaluated files transactionally, preserves failed-file evidence, and records independent run snapshots. Privacy migration scrubs legacy display values and retires credential-bearing integrations without reconstructing mappings.
 - Preview/apply uses a real persisted finding plus a current preview ID. Exact parsed scalar fixes are limited to selected RDS/Kubernetes cases. Docker fixes and shared/ambiguous YAML source are manual-only. Backups are private, immutable and versioned; writes are atomic with deterministic verification and rollback.
