@@ -1,5 +1,10 @@
 antifine.db
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite3
 *.pyc
 __pycache__/
 .pytest_cache/
@@ -12,4 +17,16 @@ build/
 .mypy_cache/
 .tox/
 .env
+.env.*
+!.env.example
 .antifine/
+
+# Private/generated evidence and temporary scan workspaces
+/compliance_report.md
+/results.sarif
+/test-results/
+/frontend/test-results/
+/frontend/playwright-report/
+/frontend/tests/e2e/.tmp/
+*.bak
+*.antifine-lock

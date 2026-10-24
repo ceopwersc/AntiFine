@@ -30,6 +30,7 @@ class AIFindingContext(BaseModel):
     dataclass; it accepts UI context fields that are not part of that model.
     """
 
+    finding_id: str | None = Field(default=None, max_length=128)
     rule_id: str | None = None
     title: str | None = None
     severity: str | None = None

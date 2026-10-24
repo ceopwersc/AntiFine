@@ -1,115 +1,31 @@
-"""Deterministic, backup-first remediation for supported IaC findings."""
-
-from __future__ import annotations
-
-import re
-import shutil
-from dataclasses import dataclass
+"""Exact allowlisted scalar changes; human-readable titles never authorize edits."""
 from pathlib import Path
+from src.models.finding import Finding
+from src.scanners.structures import terraform_attribute, yaml_scalar
 
+class RemediationError(ValueError):
+    pass
 
-class RemediationError(RuntimeError):
-    """Raised when a finding cannot be safely remediated."""
-
-
-@dataclass(frozen=True)
-class RemediationResult:
-    """Details about one successful in-place remediation."""
-
-    path: Path
-    backup_path: Path
-    changed: bool
-    action: str
-
-
-def _replace_once(content: str, pattern: str, replacement: str, action: str) -> tuple[str, str]:
-    updated, count = re.subn(pattern, replacement, content, count=1, flags=re.MULTILINE)
-    if count != 1:
-        raise RemediationError(f"Could not find the expected source pattern for: {action}")
-    return updated, action
-
-
-def _build_remediation(original: str, rule_name: str) -> tuple[str, str]:
-    """Return one allowlisted deterministic transformation without writing."""
-    lowered = rule_name.lower()
-    updated = original
-    action = ""
-
-    if "publicly accessible database" in lowered:
-        updated, action = _replace_once(
-            original,
-            r"(?m)^(\s*publicly_accessible\s*=\s*)true\s*$",
-            r"\1false",
-            "Set publicly_accessible to false",
-        )
-    elif "privileged container" in lowered or "privileged: true" in lowered:
-        updated, action = _replace_once(
-            original,
-            r"(?m)^(\s*privileged\s*:\s*)true\s*$",
-            r"\1false",
-            "Disable privileged container execution",
-        )
-    elif "privilege escalation" in lowered:
-        updated, action = _replace_once(
-            original,
-            r"(?m)^(\s*allowPrivilegeEscalation\s*:\s*)true\s*$",
-            r"\1false",
-            "Disable privilege escalation",
-        )
-    elif "user root" in lowered:
-        updated, action = _replace_once(
-            original,
-            r"(?mi)^USER\s+(?:root|0)\s*$",
-            "USER appuser",
-            "Replace runtime root user",
-        )
-    elif "missing user" in lowered:
-        # In a multi-stage Dockerfile, only the final stage controls runtime
-        # privileges; builder-stage USER instructions must not block this fix.
-        final_stage = re.split(r"(?mi)^FROM\s+", original)[-1]
-        if re.search(r"(?mi)^USER\s+", final_stage):
-            raise RemediationError("A USER instruction already exists; no safe insertion is needed")
-        final_start = original.rfind("\nFROM ")
-        final_content_start = final_start + 1 if final_start >= 0 else 0
-        match = re.search(r"(?mi)^(ENTRYPOINT|CMD)\b", original[final_content_start:])
-        insertion = "USER appuser\n"
-        if match:
-            absolute_match = final_content_start + match.start()
-            updated = original[:absolute_match] + insertion + original[absolute_match:]
-        else:
-            updated = original.rstrip() + "\n" + insertion
-        action = "Insert non-root USER instruction"
-    elif "missing healthcheck" in lowered:
-        if re.search(r"(?mi)^HEALTHCHECK\b", original):
-            raise RemediationError("A HEALTHCHECK instruction already exists")
-        updated = original.rstrip() + (
-            "\nHEALTHCHECK --interval=30s --timeout=3s "
-            "--start-period=5s --retries=3 CMD true\n"
-        )
-        action = "Add container HEALTHCHECK instruction"
+def build_candidate(content: str, finding: Finding, suffix: str) -> tuple[str, str]:
+    if finding.rule_id == "terraform.public-database" and suffix == ".tf":
+        start, end, _ = terraform_attribute(content, finding.resource, "publicly_accessible")
+        action = "Disable public access for the selected database"
+    elif finding.rule_id in {"kubernetes.privileged", "kubernetes.privilege-escalation"} and suffix in {".yaml", ".yml"}:
+        start, end, _ = yaml_scalar(content, finding.resource)
+        action = "Disable the selected container security flag"
     else:
-        raise RemediationError("This finding has no deterministic auto-fix")
-
-    if updated == original:
-        raise RemediationError("The remediation produced no file change")
-
+        raise RemediationError("No safe deterministic fix exists for this rule and file type")
+    if content[start:end].lower() != "true":
+        raise RemediationError("Source scalar is not the expected boolean true")
+    updated = content[:start] + "false" + content[end:]
+    from src.scanners.iac_audit import analyze_terraform, analyze_kubernetes
+    remaining = (analyze_terraform if suffix == ".tf" else analyze_kubernetes)(updated, "candidate" + suffix)
+    if any(f.rule_id.startswith("parser.") or (f.rule_id, f.resource) == (finding.rule_id, finding.resource) for f in remaining):
+        raise RemediationError("Candidate failed deterministic validation")
     return updated, action
 
+def preview_remediation(path: Path, rule_name: str):
+    raise RemediationError("Title-based remediation retired; use finding_id and preview_id")
 
-def preview_remediation(path: Path, rule_name: str) -> tuple[str, str, str]:
-    """Return the exact allowlisted before/after content without modifying a file."""
-    if not path.is_file():
-        raise RemediationError(f"Remediation target is not a file: {path}")
-    original = path.read_text(encoding="utf-8")
-    updated, action = _build_remediation(original, rule_name)
-    return original, updated, action
-
-
-def remediate_file(path: Path, rule_name: str) -> RemediationResult:
-    """Apply a narrowly scoped fix and preserve the original as ``.bak``."""
-    original, updated, action = preview_remediation(path, rule_name)
-
-    backup = path.with_name(path.name + ".bak")
-    shutil.copy2(path, backup)
-    path.write_text(updated, encoding="utf-8")
-    return RemediationResult(path, backup, True, action)
+def remediate_file(path: Path, rule_name: str):
+    raise RemediationError("Title-based remediation retired; use finding_id and preview_id")

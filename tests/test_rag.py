@@ -73,7 +73,7 @@ class RagTests(unittest.TestCase):
         service = type("Service", (), {
             "generate": AsyncMock(side_effect=OllamaDisabledError("disabled")),
         })()
-        with patch("src.api.server.OllamaService", return_value=service):
+        with patch("src.api.server.OllamaService", return_value=service), patch("src.api.server.canonical_ask_context", side_effect=lambda context: context):
             with self.assertRaises(HTTPException) as raised:
                 asyncio.run(ask_ai(AIAskRequest(question="How does AntiFine detect secrets?")))
         self.assertEqual(getattr(raised.exception, "status_code", None), 503)
@@ -83,7 +83,7 @@ class RagTests(unittest.TestCase):
             "config": type("Config", (), {"model": "qwen2.5:7b"})(),
             "generate": AsyncMock(return_value="AntiFine uses entropy thresholds."),
         })()
-        with patch("src.api.server.OllamaService", return_value=service):
+        with patch("src.api.server.OllamaService", return_value=service), patch("src.api.server.canonical_ask_context", side_effect=lambda context: context):
             response = asyncio.run(ask_ai(AIAskRequest(question="How does AntiFine detect high entropy secrets?")))
         self.assertEqual(response["provider"], "ollama")
         self.assertTrue(response["sources"])
@@ -138,7 +138,7 @@ class RagTests(unittest.TestCase):
                 ),
             ),
         )
-        with patch("src.api.server.OllamaService", return_value=service):
+        with patch("src.api.server.OllamaService", return_value=service), patch("src.api.server.canonical_ask_context", side_effect=lambda context: context):
             response = asyncio.run(ask_ai(request))
         self.assertEqual(response["provider"], "ollama")
         prompt = service.generate.await_args.args[0]
@@ -268,7 +268,7 @@ class RagTests(unittest.TestCase):
                 ),
             ),
         )
-        with patch("src.api.server.OllamaService", return_value=service):
+        with patch("src.api.server.OllamaService", return_value=service), patch("src.api.server.canonical_ask_context", side_effect=lambda context: context):
             response = asyncio.run(ask_ai(request))
         self.assertNotIn("PCI-DSS Requirement 6.2.2", response["answer"])
         self.assertIn("No PCI-DSS mapping is supplied", response["answer"])
@@ -392,7 +392,7 @@ class RagTests(unittest.TestCase):
                 AIMessage(role="assistant", content="It is critical because SSH is exposed."),
             ],
         )
-        with patch("src.api.server.OllamaService", return_value=service):
+        with patch("src.api.server.OllamaService", return_value=service), patch("src.api.server.canonical_ask_context", side_effect=lambda context: context):
             asyncio.run(ask_ai(request))
         prompt = service.generate.await_args.args[0]
         self.assertIn("Why is this finding critical?", prompt)

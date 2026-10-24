@@ -40,63 +40,18 @@ answers bounded questions.
 
 ## Current state
 
-### COMPLETED
+A01–A16 remediation is implemented; see `docs/SECURITY_REMEDIATION.md` for the matrix, actual validation and remaining platform/integration limits.
 
-- Terraform, Dockerfile, Kubernetes, generic secret, and SSRF scanning paths.
-- Backup-first allowlisted remediation and rescan verification.
-- Authoritative multi-framework compliance persistence in
-  `scan_results.compliance_frameworks`; legacy primary
-  `compliance_framework` remains compatibility-only.
-- Non-destructive legacy database migration.
-- SARIF and Markdown consumption of persisted mappings without text-based
-  compliance reconstruction.
-- Centralized secret-boundary sanitization in
-  `src/services/secret_boundary.py`, including known credentials,
-  conservative high-entropy/context handling, control-character cleanup, and
-  safe paths.
-- Sanitization at AI, RAG, parser-error, persistence, report, SARIF, and API
-  boundaries.
-- Backend-backed safe Secret view at `/api/findings/secrets`; values are
-  withheld.
-- AI/RAG safety rules, local lexical retrieval, bounded request-supplied chat
-  history, and no persistent AI memory.
-- Workstation UI redesign and Scan → Finding → Drawer → Review Fix → Diff →
-  Apply → Rescan → Verified workflow.
-- Focused backend suite currently passes; frontend build and lint pass.
+- Security boundaries: authenticated loopback HTTP; explicit Host/Origin checks; private expiring uploads; reparse-safe paths; bounded isolated scanners; DNS-pinned allowlisted webhooks.
+- Findings: explicit rule IDs, opaque file/finding IDs, resource locators, source regions/digests, scan coverage, transactional lifecycle and immutable run evidence (schema v3).
+- Remediation: only backend finding IDs and current preview IDs authorize exact scalar fixes; immutable private backups; atomic writes; rescan/persistence and rollback. Unsafe generic Docker fixes are manual-only.
+- Reporting: stable SARIF identities/regions and private authenticated Markdown evidence; no PDF implementation. Mappings never establish certification.
+- Frontend: typed identities, reloadable persisted findings, split workflow components, visible preview failure, gated Apply, dialog keyboard support and responsive checks.
+- Tests: isolated pytest and real Playwright harnesses exist. CI runs backend/security/CLI checks, frontend lint/typecheck/build and repeated browser workflows.
 
-### IN PROGRESS
+Raw source and backups must remain outside frontend/static roots. Never use redacted display paths to locate files. Reject unsupported or stale remediation rather than falling back to free-text rule titles. AI remains advisory and cannot approve or apply changes.
 
-- PR `ceopwersc/AntiFine#1`, branch `ceopwersc-verify-tooling`, is open.
-- Current development phase is hardening and verification after compliance and
-  secret lifecycle audits.
-- Formal Playwright specs are not yet present; browser verification has been
-  performed manually against local services.
-
-### KNOWN ISSUES
-
-- No PDF reporting implementation exists; do not claim PDF evidence support.
-- Some non-core UI pages/history/analytics remain static or partly
-  presentation-driven where no backend contract exists.
-- The frontend uses a local in-memory finding model and scan response
-  normalization; do not let it invent compliance or compliance status.
-- Secret sanitization is conservative and pattern/context based, not a proof
-  that arbitrary hostile text is non-secret. Preserve the fail-safe boundary
-  when extending it.
-- `/api/ai/test` is sanitized but remains an explicit local development/test
-  endpoint; do not turn it into a general remote prompt proxy.
-- Existing user artifacts `DESIGN.md`, `compliance_report.md`, and
-  `results.sarif` may be dirty/untracked. Do not overwrite them casually.
-
-### NEXT PRIORITIES
-
-1. Add a real Playwright test harness with synthetic fixtures and console/
-   network assertions for the critical workflows.
-2. Replace remaining static presentation pages with evidence-backed API
-   contracts or clearly label them unavailable.
-3. Continue security review of path handling, parser errors, logging, webhook
-   payloads, and all future persistence fields.
-4. Keep compliance mappings and secret metadata source-backed when adding
-   controls or exporters.
+Existing user artifacts `DESIGN.md`, `compliance_report.md`, `results.sarif` and real databases must be preserved. Repository test fixtures are synthetic only. Do not assert live webhook/Ollama verification, full PSS/framework coverage or remote CI results from offline/local tests.
 
 ## Validation
 
@@ -107,6 +62,7 @@ python -m pytest -q
 cd frontend
 npm run lint
 npm run build
+npm run test:e2e -- --repeat-each=2
 ```
 
 Use temporary synthetic fixtures only. Never use real credentials or send

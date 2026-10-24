@@ -37,15 +37,11 @@ async def dispatch_security_alert(finding: Dict[str, Any], webhook_url: str) -> 
         "remediation_guidance": finding.get("remediation_guidance", "Investigate immediately.")
     }
 
+    import asyncio
+    from src.api.security import safe_json
+    from src.integrations.webhook_policy import deliver
     try:
-        async with httpx.AsyncClient() as client:
-            # 3-second timeout to ensure failed webhook targets never block or crash a scan
-            response = await client.post(webhook_url, json=payload, timeout=3.0)
-            response.raise_for_status()
-            logger.info(f"Successfully dispatched alert to {webhook_url}")
-    except httpx.TimeoutException:
-        logger.error(f"Timeout dispatching alert to {webhook_url}")
-    except httpx.HTTPStatusError as exc:
-        logger.error(f"HTTP Error {exc.response.status_code} dispatching alert to {webhook_url}")
-    except Exception as exc:
-        logger.error(f"Failed to dispatch alert to {webhook_url}: {exc}")
+        await asyncio.to_thread(deliver, webhook_url, safe_json(payload))
+        logger.info("Security alert delivered")
+    except Exception:
+        logger.warning("Security alert delivery failed or was rejected by policy")

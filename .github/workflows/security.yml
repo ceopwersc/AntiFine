@@ -1,32 +1,53 @@
-name: AntiFine Security Scan
-
-on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-
+name: AntiFine release checks
+on: [push, pull_request]
+permissions:
+  contents: read
 jobs:
-  antifine-scan:
-    runs-on: ubuntu-latest
-    permissions:
-      security-events: write # Required for SARIF upload
-      actions: read
-      contents: read
-
+  backend:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.12', '3.14']
+    runs-on: ${{ matrix.os }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-
-      - name: Run AntiFine Pipeline
-        run: |
-          python -m src.cli.gate --file Dockerfile.multistage_compliant --fail-on HIGH
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+      - run: python -m pip install -r requirements-dev.lock
+      - name: Backend, scanner, secret, CLI, migration and security regressions
+        run: python -m pytest -q --junitxml=test-results/backend.xml
+      - name: Headless gate compatibility
+        run: python -m src.cli.gate --file Dockerfile.multistage_compliant --fail-on HIGH
+  browser:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: python -m pip install -r ../requirements-dev.lock
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - name: Isolated production-preview browser workflows, repeated
+        env:
+          ANTIFINE_E2E_OUTPUT: ${{ runner.temp }}/antifine-playwright
+        run: npm run test:e2e -- --repeat-each=2
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-failure-evidence
+          path: ${{ runner.temp }}/antifine-playwright/

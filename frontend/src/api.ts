@@ -1,10 +1,29 @@
 import axios from 'axios';
+import type { BackendFinding } from './types';
 
 const apiClient = axios.create({
-  baseURL: 'http://localhost:8000/api',
+  baseURL: '/api',
+  withCredentials: true,
 });
 
+let session: Promise<unknown> | undefined;
+apiClient.interceptors.request.use(async (config) => {
+  session ??= axios.post('/api/session', {}, { withCredentials: true, headers: { 'X-AntiFine-Request': '1' } }).catch(error => { session = undefined; throw error; });
+  await session;
+  return config;
+});
+apiClient.interceptors.response.use(response => response, async error => {
+  if (error.response?.status === 401 && !error.config._sessionRetried) {
+    session = undefined; error.config._sessionRetried = true;
+    return apiClient.request(error.config);
+  }
+  throw error;
+});
+
+export const fetchFindings = async (): Promise<{ findings: BackendFinding[] }> => (await apiClient.get('/findings')).data;
+
 export interface ExplainableFinding {
+  id?: string;
   rule_name: string;
   severity: string;
   filename: string;
@@ -73,6 +92,7 @@ export const askAntiFine = async (question: string, context?: AskContext, messag
     context: context ? {
       source: 'finding',
       finding: {
+        finding_id: context.finding_id,
         rule_id: context.rule_id,
         title: context.title,
         severity: context.severity,
@@ -91,6 +111,7 @@ export const askAntiFine = async (question: string, context?: AskContext, messag
 };
 
 export interface RemediationExplanationRequest {
+  preview_id?: string;
   finding: ExplainableFinding;
   before: string;
   after: string;
@@ -108,8 +129,16 @@ export const explainRemediation = async (
   return response.data;
 };
 
-export const fetchDashboardStats = async () => {
-  return (await apiClient.get('/dashboard')).data;
+export interface DashboardStats {
+  status: string;
+  counts: Record<string, number>;
+  compliance: Record<string, string>;
+  total_findings: number;
+  total_secrets: number;
+}
+
+export const fetchDashboardStats = async (): Promise<DashboardStats> => {
+  return (await apiClient.get<DashboardStats>('/dashboard')).data;
 };
 
 export interface SecretFinding {
@@ -131,31 +160,37 @@ export const runScan = async (target: string, type: string) => {
   return (await apiClient.post(endpoint, body)).data;
 };
 
-export const remediateFinding = async (target: string, ruleName: string) => {
-  return (await apiClient.post<{
-    status: string;
-    target: string;
-    backup: string;
-    action: string;
-    findings_count: number;
-    findings: Array<{ rule_name: string; severity: string }>;
-  }>('/scan/iac/remediate', {
-    target_path: target,
-    rule_name: ruleName,
+export const uploadScanWorkspace = async (files: File[]): Promise<{ target_path: string }> => {
+  const formData = new FormData();
+  const relativePaths = files.map(f => f.webkitRelativePath || f.name);
+  files.forEach(f => formData.append('files', f));
+  formData.append('relative_paths', JSON.stringify(relativePaths));
+  return (await apiClient.post('/scan/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
   })).data;
 };
 
-export const previewRemediation = async (target: string, ruleName: string): Promise<{
-  target: string;
-  action: string;
-  before: string;
-  after: string;
-}> => {
-  return (await apiClient.post('/scan/iac/remediation/preview', {
-    target_path: target,
-    rule_name: ruleName,
-  })).data;
+export const fetchScanHistory = async () => {
+  return (await apiClient.get('/scan/history')).data;
 };
+
+export interface FixResult {
+  status: string;
+  verified: boolean;
+  target: string;
+  backup_id: string;
+  backup: string;
+  action: string;
+  findings_count: number;
+  findings: BackendFinding[];
+  scan_id: string;
+}
+export const remediateFinding = async (findingId: string, previewId: string): Promise<FixResult> =>
+  (await apiClient.post('/scan/iac/remediate', { finding_id: findingId, preview_id: previewId })).data;
+
+export const previewRemediation = async (findingId: string): Promise<{
+  preview_id: string; finding_id: string; source_digest: string; target: string; action: string; before: string; after: string;
+}> => (await apiClient.post('/scan/iac/remediation/preview', { finding_id: findingId })).data;
 
 export const explainFinding = async (
   finding: ExplainableFinding,
@@ -173,17 +208,13 @@ export const generateReport = async (format: string) => {
     const resp = await apiClient.get('/scan/iac/export/sarif');
     const blob = new Blob([JSON.stringify(resp.data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    return { status: 'success', message: 'SARIF report generated', downloadUrl: url };
+    return { status: 'success', message: 'SARIF report generated', downloadUrl: url, downloadName: 'antifine-results.sarif' };
   }
   const resp = await apiClient.post('/report/generate');
   const data = resp.data;
-  return {
-    status: data.status,
-    message: data.results?.markdown?.status === 'success'
-      ? `Markdown report written to ${data.results.markdown.file} (${data.results.markdown.findings} findings)`
-      : data.results?.markdown?.message || 'Report generated',
-    results: data.results,
-  };
+  if (data.results?.markdown?.status !== 'success') throw new Error('Report generation failed.');
+  const content = await apiClient.get(`/reports/${encodeURIComponent(data.results.markdown.file)}`, {responseType: 'blob'});
+  return {status: 'success', message: 'Markdown evidence report generated', downloadUrl: URL.createObjectURL(content.data), downloadName: 'antifine-evidence.md', results: data.results};
 };
 
 export const getWebhooks = async () => {

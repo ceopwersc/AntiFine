@@ -7,46 +7,28 @@ description: Comprehensive knowledge base containing the architecture, scanning 
 
 This skill provides a deep dive into the AntiFine IaC scanning tool. Use this context when building new scanners, updating rules, or fixing CI/CD issues.
 
-## 1. Core Architecture
-- **Orchestrator**: Python 3 backend using FastAPI (`src/api/server.py`) and a headless CLI gating script (`src/cli/gate.py`).
-- **Data Model**: All scanners return a unified `Finding` dataclass (defined in `src/models/finding.py`) to eliminate type conflicts.
-- **Scanner Engine**: `src/scanners/iac_audit.py` dispatches files to specific analyzers (`analyze_dockerfile`, `analyze_terraform`, `analyze_kubernetes`, `analyze_generic_secrets`).
-- **Secret Scanner**: `src/scanners/secret_scanner.py` centrally handles high-confidence vendor regexes and character-set adjusted Shannon entropy filtering.
-- **Compliance Mapper**: `src/scanners/compliance_mapper.py` translates findings into rich structures with frameworks (e.g., CIS Benchmarks, NIST SP 800-190) and remediation guidance.
-- **Reporting**: `src/reporting/sarif_exporter.py` translates findings to OASIS SARIF v2.1.0 JSON format for CI/CD ingestion, injecting compliance framework and remediation metadata natively.
-- **Remediation**: `src/scanners/remediation.py` applies a small allowlist of deterministic Dockerfile, Kubernetes, and Terraform fixes after creating a `.bak` backup, then the API re-scans the target.
-- The remediation UI only marks a finding fixed after the API confirms success; missing demo or preview paths remain open and show the backend validation error.
-- The finding drawer presents Ollama output as a secondary AI Security Explanation, with session caching and retry/regenerate controls.
-- The repository currently keeps the runtime application clean without the removed local test suite or test fixtures; validation is performed externally when needed.
-- **Optional Ollama**: `src/services/ollama_service.py` is a lazy, environment-configured client for local Ollama text generation. It loads the project-root `.env` file with `python-dotenv`, then reads `OLLAMA_ENABLED`, `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, and `OLLAMA_TIMEOUT` with the existing `os.getenv` pattern; explicit process environment variables take precedence. It is exposed only through `/api/ai/health` and `/api/ai/test`; it is never part of deterministic scanning or remediation.
-- **Frontend Workspace**: React/Vite application (`frontend/`) heavily utilizing Tailwind CSS (dark-mode cybersecurity aesthetic) and Lucide icons. `Dashboard.tsx` serves as an interactive Remediation Workspace with real-time KPI filtering, on-demand scanning, and a slide-over code remediation drawer.
+## 1. Current architecture
 
-## 2. CI/CD & Gating (`src/cli/gate.py`)
-- The primary automated gate runs headlessly via `python -m src.cli.gate --file <path> --fail-on <severity>`.
-- The CLI safely parses the unified `Finding` model to calculate compliance scores and blocks builds accordingly.
-- Headless execution is protected by lazy-loading the Tkinter/customtkinter GUI in `src/main.py`.
+Read `docs/CODEX_HANDOFF.md` and `docs/SECURITY_REMEDIATION.md` for the schema-v3 implementation and verified A01–A16 behavior.
 
-## 3. Scanner Pipelines
-### Dockerfile
-- Enforces multi-stage build awareness.
-- `USER root` is informational in intermediate stages but highly restricted in the final stage.
-- Only the final runtime stage requires a `HEALTHCHECK`.
+- FastAPI composes thin core/integration routes and optional AI endpoints. Local security middleware requires a per-launch capability and loopback/Host/Origin validation.
+- Private workspaces live outside web roots. Filesystem operations reject path escapes, links, junctions, reparse points and ambiguous Windows names, and revalidate reads/writes.
+- Scan workers have bounded bytes, nodes, depth, documents, file/finding counts, concurrency, wall time, CPU and memory. Deterministic findings have explicit rule IDs, file IDs, resource locators, source regions, digests and stable IDs.
+- SQLite schema v3 preserves legacy evidence, adds scan-run history, reconciles evaluated files transactionally, preserves failed-file evidence, and records independent run snapshots. Privacy migration scrubs legacy display values and retires credential-bearing integrations without reconstructing mappings.
+- Preview/apply uses a real persisted finding plus a current preview ID. Exact parsed scalar fixes are limited to selected RDS/Kubernetes cases. Docker fixes and shared/ambiguous YAML source are manual-only. Backups are private, immutable and versioned; writes are atomic with deterministic verification and rollback.
+- Frontend workflow components and hooks use typed backend identities and persisted reload; client display values never authorize edits.
+- SARIF and Markdown use persisted source/mapping/scan evidence; PDF is absent. Mapping and risk heuristics are not compliance certification.
+- Ollama explains backend findings and validated previews only. It cannot write source, execute commands, approve fixes or alter deterministic state. History is bounded and not permanently persisted.
 
-### Kubernetes
-- Uses `yaml.safe_load_all()` for structural parsing of multi-document manifests.
-- Traverses `Pod`, `Deployment`, `DaemonSet`, `Job`, etc. to find the `PodSpec`.
-- Enforces the **PSS Restricted Profile** (CRITICAL: privileged container/host namespaces; HIGH: dropping capabilities; MEDIUM: read-only filesystem/resource limits).
+## 2. Validation and supported runtime
 
-### Terraform
-- Uses `python-hcl2` for native structural parsing of `.tf` ASTs.
-- Enforces high-risk AWS resource constraints:
-  - **aws_security_group**: Restricts `0.0.0.0/0` ingress to sensitive ports (22, 3389) (CRITICAL).
-  - **aws_db_instance**: Blocks `publicly_accessible = true` (CRITICAL).
-  - **aws_s3_bucket**: Requires embedded or companion Server-Side Encryption (HIGH) and Public Access Block (HIGH).
+Python 3.12/3.14 and Node 24 are release-check targets. Install pinned `requirements-dev.lock` and `npm ci`. Run pytest, lint, typecheck, build and repeated Playwright tests. All tests use private temporary data, never the developer database or real credentials. CI covers Windows/Linux backend targets and a Linux browser job. Local tests do not establish remote CI or live model/webhook behavior.
 
-### Secrets
-- Scans YAML/HCL string values and generic config files (`.env`, `.conf`, `.json`).
-- Ignores UUIDs, SHA hashes, and Docker ARGs to reduce false positives using a highly tuned Shannon entropy filter.
+Before release commits, review the index for credentials and generated/private artifacts and validate the selected source independently of unrelated local edits. Preserve unrelated changes; never force-push. Follow an explicit user-supplied commit message when one is provided.
+
+## 3. API and safety contracts
+
+Uploads use `/api/scan/upload`; scan accepts an authorized relative target or private workspace ID. Preview requires `finding_id`; apply additionally requires `preview_id`. Title-based remediation must remain rejected. `verified` is true only after a complete zero-finding rescan. Preserve distinct INFORMATIONAL severity and explicit unsupported/error coverage.
 
 ## 4. Agent Instructions
 - **Continuous Documentation**: You MUST always update `README.md` and any relevant skills files (like this one) after every prompt to ensure documentation stays perfectly in sync with the codebase.

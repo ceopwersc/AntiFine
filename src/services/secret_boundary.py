@@ -14,7 +14,7 @@ _KNOWN_PATTERNS = (
     (re.compile(r"(?i)\b(?:password|passwd|secret|token|api[_-]?key|access[_-]?key)(\s*[:=]\s*)([\"']?)(?:\[[^\]]+\]|[^\s\"']+)\2"), r"\1[REDACTED CREDENTIAL]"),
 )
 _CREDENTIAL_CONTEXT = re.compile(r"(?i)(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|credential)")
-_TOKEN = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z0-9+/=_-]{24,}(?![A-Za-z0-9_])")
+_TOKEN = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z0-9+/_-]{16,}={0,2}(?![A-Za-z0-9_])")
 
 
 def _entropy(value: str) -> float:
@@ -25,12 +25,18 @@ def _entropy(value: str) -> float:
 
 def _redact_entropy(match: re.Match[str], text: str) -> str:
     value = match.group(0)
-    if _entropy(value) < 4.2:
+    # Preserve only explicit non-secret identifier formats. Opaque workspace IDs
+    # are backend generated; the same thresholds as detection protect source previews.
+    if re.fullmatch(r"workspace_[0-9a-f]{32}", value) or re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", value) or re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", value):
+        return value
+    is_hex = bool(re.fullmatch(r"[0-9a-fA-F]+", value))
+    threshold = 3.0 if is_hex else 4.2
+    if _entropy(value) < threshold:
         return value
     start, end = match.span()
     context = text[max(0, start - 48):min(len(text), end + 48)]
     # Long, dense credentials are unsafe even without a conventional key label.
-    if _CREDENTIAL_CONTEXT.search(context) or (len(value) >= 32 and _entropy(value) >= 4.65):
+    if is_hex or _CREDENTIAL_CONTEXT.search(context) or _entropy(value) >= threshold:
         return "[REDACTED HIGH-ENTROPY SECRET]"
     return value
 

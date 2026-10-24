@@ -47,6 +47,8 @@ knowledge as general guidance rather than AntiFine-detected fact.
 
 def finding_id(finding: Finding) -> str:
     """Return a stable identifier derived from non-secret finding metadata."""
+    if finding.id:
+        return finding.id
     metadata = "|".join(
         (
             finding.rule_name,
@@ -55,7 +57,7 @@ def finding_id(finding: Finding) -> str:
             ",".join(finding.frameworks),
         )
     )
-    return hashlib.sha256(metadata.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(metadata.encode("utf-8")).hexdigest()
 
 
 def build_explanation_prompt(

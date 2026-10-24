@@ -23,7 +23,7 @@ _VENDOR_REGEXES = {
     "AWS Secret Access Key": re.compile(r'(?i)aws_(?:secret_access_key|key)\s*[:=]\s*["\']?([A-Za-z0-9/+=]{40})["\']?'),
     "GitHub Personal Access Token": re.compile(r'\b(ghp_[A-Za-z0-9_]{36}|github_pat_[A-Za-z0-9_]{82})\b'),
     "Slack API Token": re.compile(r'\bxox[baprs]-[0-9]{10,13}-[0-9]{10,13}[a-zA-Z0-9]*\b'),
-    "Generic Private Key": re.compile(r'-----BEGIN (?:RSA|EC|DSA|OPENSSH|PGP)? PRIVATE KEY-----')
+    "Generic Private Key": re.compile(r'-----BEGIN (?:(?:RSA|EC|DSA|OPENSSH|PGP) )?PRIVATE KEY-----')
 }
 
 # ── False-Positive Allowlist Patterns ─────────────────────────────────────
@@ -76,6 +76,7 @@ def scan_value_for_secrets(
     for vendor_name, pattern in _VENDOR_REGEXES.items():
         if pattern.search(value) or pattern.search(key_name + "=" + value):
             return Finding(
+                rule_id="secrets.vendor-match",
                 rule_name=f"Exact Vendor Match ({vendor_name}) in {filename} [{key_name}]",
                 severity="CRITICAL",
                 filename=filename,
@@ -107,6 +108,7 @@ def scan_value_for_secrets(
     
     if h >= threshold:
         return Finding(
+            rule_id="secrets.entropy",
             rule_name=(
                 f"Statistical Entropy (Shannon H >= {threshold}) in {filename} "
                 f"[{key_name}=... H={h:.2f}]"
@@ -125,3 +127,17 @@ def scan_value_for_secrets(
         )
         
     return None
+
+
+def vendor_findings(content: str, filename: str) -> list[Finding]:
+    """Vendor signatures are independent of assignment and entropy heuristics."""
+    results = []
+    for vendor_index, (name, pattern) in enumerate(_VENDOR_REGEXES.items()):
+        for match_index, match in enumerate(pattern.finditer(content)):
+            results.append(Finding(
+                f"Exact Vendor Match ({name}) in {filename}", "CRITICAL", filename,
+                frameworks=["CIS Docker Benchmark 4.7", "CWE-798 (Use of Hard-coded Credentials)", "ISO 27001 A.8.24", "NIST SP 800-190 §3.3.1"],
+                remediation="Revoke the credential and inject it through a secret manager.",
+                rule_id="secrets.vendor-match", line=content.count("\n", 0, match.start()) + 1,
+                resource=f"vendor/{vendor_index}/{match_index}"))
+    return results

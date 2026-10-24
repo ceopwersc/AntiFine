@@ -28,6 +28,26 @@ class Finding:
     frameworks: list[str] = field(default_factory=list)
     remediation: str = ""
     description: str = ""
+    rule_id: str = "legacy.unknown"
+    resource: str = "file"
+    line: int = 1
+    column: int = 1
+    end_line: int = 1
+    id: str = ""
+    file_id: str = ""
+    workspace_id: str = ""
+    source_digest: str = ""
+    scan_id: str = ""
+    remediation_eligible: bool = False
+    status: str = "OPEN"
+
+    def __post_init__(self) -> None:
+        from src.services.secret_boundary import sanitize_path, sanitize_text
+        self.rule_name = sanitize_text(self.rule_name, limit=1000)
+        self.filename = sanitize_path(self.filename)
+        self.description = sanitize_text(self.description, limit=4000)
+        self.remediation = sanitize_text(self.remediation, limit=4000)
+        self.frameworks = [sanitize_text(x, limit=512) for x in self.frameworks]
     @property
     def compliance_frameworks(self) -> list[str]:
         """Compatibility alias for the authoritative mapping list."""

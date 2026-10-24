@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import sys
-import hashlib
+from urllib.parse import quote
 from typing import Any
 from pathlib import Path
 
@@ -39,7 +39,9 @@ def export_to_sarif(output_file: str, db_path: Path = DB_PATH) -> int:
             "frameworks": list(record.frameworks),
             "description": record.description_text,
             "remediation": record.remediation,
-            "target": "project-root",
+            "target": record.target_path,
+            "rule_id": record.rule_id, "id": record.finding_id, "line": record.source_line, "column": record.source_column,
+            "end_line": record.end_line, "scan_id": record.scan_id, "resource": record.resource,
         }
         for record in records
     ])
@@ -54,7 +56,7 @@ def export_to_sarif(output_file: str, db_path: Path = DB_PATH) -> int:
         print(f"[error] Could not write SARIF report to {output_file}: {exc}", file=sys.stderr)
         return 1
 
-def generate_sarif(findings: list[dict[str, Any]]) -> dict[str, Any]:
+def generate_sarif(findings: list[dict[str, Any]], *, coverage: list | None = None) -> dict[str, Any]:
     """Generate a SARIF JSON object conforming to OASIS SARIF v2.1.0."""
     rules = []
     results = []
@@ -76,13 +78,12 @@ def generate_sarif(findings: list[dict[str, Any]]) -> dict[str, Any]:
         frameworks = finding.get("frameworks")
         if frameworks is None:
             frameworks = finding.get("compliance_frameworks", [])
-        frameworks = list(frameworks or [])
+        frameworks = [sanitize_text(v) for v in frameworks or []]
         remediation = sanitize_text(finding.get("remediation", ""), limit=4000)
         description = sanitize_text(finding.get("description") or vuln_type, limit=4000)
         
         # Generate a stable rule ID based on the vulnerability type hash
-        rule_hash = hashlib.md5(vuln_type.encode('utf-8')).hexdigest()[:6]
-        rule_id = f"AF-IAC-{rule_hash.upper()}"
+        rule_id = finding.get("rule_id") or "legacy.unknown"
         
         if rule_id not in seen_rules:
             rules.append({
@@ -106,19 +107,21 @@ def generate_sarif(findings: list[dict[str, Any]]) -> dict[str, Any]:
                 {
                     "physicalLocation": {
                         "artifactLocation": {
-                            "uri": target
-                        }
+                            "uri": quote(target.replace("\\", "/"), safe="/:")
+                        },
+                        "region": {"startLine": max(1, finding.get("line", 1)), "startColumn": max(1, finding.get("column", 1)), "endLine": max(finding.get("line", 1), finding.get("end_line", 1))}
                     }
                 }
             ],
             "properties": {
                 "frameworks": frameworks,
-                "remediation": remediation
+                "remediation": remediation,
+                "finding_id": finding.get("id", ""), "scan_id": finding.get("scan_id", ""), "resource": finding.get("resource", "unknown")
             }
         })
 
     return {
-        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
         "version": "2.1.0",
         "runs": [
             {
@@ -129,7 +132,8 @@ def generate_sarif(findings: list[dict[str, Any]]) -> dict[str, Any]:
                         "rules": rules
                     }
                 },
-                "results": results
+                "results": results,
+                "properties": {"scan_coverage": coverage or [], "compliance_status": "Not evaluated"}
             }
         ]
     }
