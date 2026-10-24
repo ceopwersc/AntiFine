@@ -1,91 +1,439 @@
 # AntiFine
 
-Local security engineering for Terraform, Kubernetes, Dockerfiles and supported configuration files. Findings, severities, mappings and remediation eligibility come from deterministic rules. Optional local Ollama provides advisory explanations and has no write or command tools.
+AntiFine is a local infrastructure-security workstation for Terraform, Dockerfiles, Kubernetes manifests, and supported configuration files. It combines deterministic scanning, persisted findings, narrow automatic fixes, and exportable evidence in a React interface backed by a Python API.
 
-## Runtime and installation
+The scanner owns findings, severity, compliance mappings, and remediation eligibility. Optional local Ollama explanations are advisory: AI cannot scan, edit files, execute commands, approve fixes, or change verification results.
 
-Supported release-check targets: Python 3.12 and 3.14; Node.js 24. The current local verification environment is Windows with Python 3.14 and Node 24. CI also checks Linux.
+AntiFine is intended for a trusted local workstation. It is not a hosted multi-user service or a complete compliance assessment.
 
-```bash
-python -m venv .venv
-# Activate .venv using your shell, then:
-python -m pip install -r requirements-dev.lock
-cd frontend
-npm ci
+## Contents
+
+- [Features and coverage](#features-and-coverage)
+- [Architecture](#architecture)
+- [Technology and prerequisites](#technology-and-prerequisites)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Using the workstation](#using-the-workstation)
+- [CLI reference](#cli-reference)
+- [API overview](#api-overview)
+- [Deterministic remediation](#deterministic-remediation)
+- [Secret detection and privacy](#secret-detection-and-privacy)
+- [Storage and upgrades](#storage-and-upgrades)
+- [Reports and exports](#reports-and-exports)
+- [Optional Ollama integration](#optional-ollama-integration)
+- [Configuration](#configuration)
+- [Testing and CI](#testing-and-ci)
+- [Security considerations and limitations](#security-considerations-and-limitations)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Features and coverage
+
+The workstation provides file imports and authorized local-path scans, finding search and filters, source details, fix previews, scan history, safe secret metadata, Markdown reports, and SARIF exports. Findings reload from the backend after a browser refresh. Dialogs support keyboard focus and Escape dismissal.
+
+| Input | Implemented checks | Limits |
+|---|---|---|
+| Terraform `.tf` | Selected AWS security-group unrestricted IPv4/IPv6 SSH/RDP and all-protocol ingress checks; public RDS; missing S3 encryption/public-access-block configuration; parsed-value secret checks | Static source only. No plan, provider, module, variable, or deployed-state evaluation. S3 checks inspect configuration/reference presence, not effective bucket policy. |
+| Names containing `dockerfile` | Explicit root/missing user; user/group syntax; unpinned/latest image checks; missing/disabled final-stage healthcheck; selected ENV/ARG secrets; intermediate-stage informational findings | Does not build images, inspect inherited image configuration, prove accounts exist, or execute healthchecks. |
+| Kubernetes `.yaml` / `.yml` | Host namespaces, privileged containers, privilege escalation, non-root settings, writable root filesystems, capabilities, seccomp, resource limits, and secrets | Selected checks, not complete Kubernetes Pod Security Standards (PSS). |
+| JSON, `.env`, `.env.*`, `.conf` | Nested JSON strings/arrays; quoted/unquoted assignments; implemented vendor signatures and entropy heuristics | Not a general parser for every configuration language or an exhaustive secret detector. |
+
+PodSpec checks support Pods, Deployments, ReplicaSets, ReplicationControllers, StatefulSets, DaemonSets, Jobs, and CronJobs. They examine regular, init, and ephemeral containers, including supported Pod-level non-root/seccomp inheritance. Other YAML can receive structure/secret checks without a Pod policy assessment.
+
+Severities are `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, and distinct `INFORMATIONAL`. Unknown and unevaluated evidence must not become passing compliance results. Framework/control mappings are finding metadata, not certified control passes.
+
+Rules attach selected CIS, PCI DSS 4.0, NIST SP 800-190, CWE, and ISO 27001 labels where supplied by the implementation. Mapping coverage varies by rule; missing mappings are not inferred from finding text or AI output.
+
+An optional SSRF probing path exists in the API and older CLI. It sends real network requests, uses response indicators, and reports partial coverage. It is separate from offline IaC scanning and the verified local fix workflow.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    Browser["React workstation"] --> Proxy["Vite loopback frontend and /api proxy"]
+    Proxy --> API["FastAPI authorization and safe responses"]
+    API --> Scan["Scan orchestration"]
+    Scan <--> Workers["Bounded deterministic scanner processes"]
+    Workers --> Source["Authorized source files"]
+    Scan --> Repository["Finding and scan repository"]
+    Repository --> DB[(SQLite)]
+    API --> Fix["Finding-bound preview and apply"]
+    Fix --> Source
+    Fix --> Private["Private imports, previews, backups, reports"]
+    Fix --> Scan
+    API --> Export["Markdown and SARIF"]
+    Export --> Repository
+    Export --> Private
+    API --> Advisory["Optional AI and local retrieval"]
+    Advisory --> Repository
+    Advisory --> Ollama["Local Ollama"]
 ```
 
-From the repository root, start the API:
+The API delegates scans to bounded child processes; the parent records evidence. Remediation reproduces a persisted finding, checks source bytes, makes an allowlisted edit, and rescans. AI reads sanitized context and has no source-write or approval path.
+
+| Area | Source |
+|---|---|
+| Composition, local authorization, workstation/integration/AI routes | [src/api/](src/api/) |
+| Orchestration, storage, workspaces, remediation, worker limits | [src/services/](src/services/) |
+| Deterministic rules, bounded parsers, exact edits, secrets | [src/scanners/](src/scanners/) |
+| Finding and AI-context contracts | [src/models/](src/models/) |
+| SQLite bootstrap and migrations | [database/](database/), [scan_repository.py](src/services/scan_repository.py) |
+| Markdown and SARIF | [src/reporting/](src/reporting/) |
+| Static AI knowledge and lexical retrieval | [src/ai/](src/ai/), [docs/ai/](docs/ai/) |
+| React components, hooks, types, API client | [frontend/src/](frontend/src/) |
+| CLI utilities | [src/cli/](src/cli/), [src/main.py](src/main.py) |
+| Regression suites | [tests/](tests/), [frontend/tests/e2e/](frontend/tests/e2e/) |
+
+## Technology and prerequisites
+
+The backend uses Python, FastAPI, Pydantic, Uvicorn, SQLite, `python-hcl2`/Lark, PyYAML, and JSON parsing. The frontend uses React, TypeScript, Vite, Tailwind CSS, Framer Motion, and Lucide icons. Validation uses pytest, JSON Schema, Oxlint, TypeScript, and Playwright/Chromium.
+
+Use **Python 3.12 or 3.14**, **Node.js 24.x**, npm, and Git. CI targets Windows/Linux with Python 3.12/3.14 and Node 24 browser checks. Local release validation used Windows, Python 3.14.7, Node 24.20.0, and npm 11.19.0; this does not establish results for every target.
+
+Source scanning needs no Terraform executable, Docker daemon, Kubernetes cluster, or cloud credentials. Ollama is optional. Dependency/browser/model downloads need network access; core source analysis needs no external scanning service.
+
+Dependencies are pinned in [requirements.lock](requirements.lock), [requirements-dev.lock](requirements-dev.lock), and [frontend/package-lock.json](frontend/package-lock.json).
+
+## Installation
+
+Clone the branch containing this implementation:
+
+```bash
+git clone --branch feature/workstation-evidence https://github.com/ceopwersc/AntiFine.git
+cd AntiFine
+```
+
+### Windows PowerShell
+
+```powershell
+py -3.14 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements-dev.lock
+```
+
+Without the Python launcher, use `python -m venv .venv` with a supported interpreter. If activation is restricted, call `.\.venv\Scripts\python.exe` directly instead of changing machine-wide execution policy.
+
+### Linux / Bash
+
+```bash
+python3.14 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-dev.lock
+```
+
+Substitute `python3.12` for that configured target. Your OS may require its Python venv package. Verify Linux operation for your environment; the CI definition alone is not a passing run.
+
+Then, from the repository root:
+
+```bash
+npm --prefix frontend ci
+```
+
+The development lock includes runtime and test dependencies. Backend-only operation can use `python -m pip install -r requirements.lock`; tests also need the development dependencies.
+
+## Quick start
+
+In an activated Python environment, start the API from the repository root:
 
 ```bash
 python -m uvicorn src.api.server:app --host 127.0.0.1 --port 8000 --no-access-log
 ```
 
-In `frontend/`, run `npm run dev -- --host 127.0.0.1 --port 5173` and open http://127.0.0.1:5173. Vite proxies `/api` to the loopback backend. For a production-bundle local check, run `npm run build` followed by `npm run preview -- --host 127.0.0.1 --port 5173`.
-
-The workstation accepts loopback clients only. Its browser establishes a per-launch HttpOnly, SameSite session through `POST /api/session`, with an approved Origin and `X-AntiFine-Request: 1`. Other API routes require the session cookie or an explicitly configured `X-AntiFine-Token`. Native API clients can configure `ANTIFINE_API_TOKEN` in the backend process environment; never put the value in source control. `/api/health` is the sole unauthenticated status endpoint. CORS is not authentication. Public hosting or a remote reverse proxy is unsupported.
-
-## Supported deterministic checks
-
-- Terraform: public IPv4/IPv6 SSH/RDP and all-protocol ingress, public databases, and the implemented S3 encryption/public-access rules. Static source analysis does not evaluate Terraform plans, providers, variables or every cloud control.
-- Dockerfiles: effective root user (including user/group syntax), image tags, final-stage healthcheck state, ENV/ARG secrets and intermediate-stage informational findings. `HEALTHCHECK NONE` is disabled. Generic user creation and fake healthchecks are manual-only.
-- Kubernetes: supported PodSpecs in Pods, Deployments, ReplicaSets, ReplicationControllers, StatefulSets, DaemonSets, Jobs and CronJobs; regular, init and ephemeral containers; inherited Pod-level non-root/seccomp settings; selected host, privilege, capability, filesystem and resource checks. This is partial PSS coverage, not full certification.
-- Secrets: vendor signatures and entropy checks in HCL/YAML, nested JSON objects/arrays, `.env` and `.conf` assignments. Malformed input and unsupported files have explicit coverage/error states. False-positive exclusions and conservative redaction are not proof that arbitrary text cannot contain a secret.
-
-Only evaluated rules produce evidence. A clean result does not certify an entire framework. `INFORMATIONAL` remains distinct. Mappings are persisted metadata, never inferred control passes or a compliance score.
-
-## Scan, review and apply
-
-1. Import files with `POST /api/scan/upload` (`files`, optional JSON `relative_paths`), or select a relative server-local path.
-2. Call `POST /api/scan/iac` with `target_path`: a relative path or the returned opaque `workspace_*` ID.
-3. Use the backend finding `id` for `POST /api/scan/iac/remediation/preview` (`finding_id`).
-4. Inspect the sanitized deterministic diff. Apply through `POST /api/scan/iac/remediate` with `finding_id` and `preview_id`.
-5. The backend checks the finding, exact source version and resource, creates an immutable private backup, atomically applies the change and reparses/rescans. A changed source invalidates the preview.
-
-Title-based remediation requests are deliberately rejected with 422. Supported automatic fixes currently change an observed boolean for a selected public RDS instance or a selected Kubernetes privilege flag. Shared YAML source anchors and ambiguous/unsupported cases are manual-only. AI never selects or approves a fix.
-
-An applied change with other findings remaining returns `verified: false`. A file is verified only after a complete deterministic rescan has zero findings. Failed verification restores the original if the source has not concurrently changed. Backups remain recoverable under opaque IDs outside the web root; previous backups are never overwritten.
-
-The CLI is independent of HTTP sessions:
+In a second terminal, from the repository root:
 
 ```bash
-python -m src.cli.gate --file path/to/source.tf --fail-on HIGH
+npm --prefix frontend run dev -- --host 127.0.0.1 --port 5173 --strictPort
 ```
 
-It exits 1 for threshold violations, unsupported input or incomplete evaluation, and 0 for covered files meeting the threshold. Legacy `--min-score` is a risk heuristic, not compliance certification.
+Open [the workstation](http://127.0.0.1:5173). Vite proxies `/api` to `127.0.0.1:8000`. Keep these ports: the local Origin policy explicitly permits 5173/8000 origins. Resolve port conflicts deliberately; a silently selected alternative port will not establish a valid session.
 
-## Storage, exports and upgrades
+The browser establishes its local session automatically. Scanning and supported fixes work with AI disabled. Database initialization/migration occurs when persistence is first used; manual initialization is not required for the workstation.
 
-- Default SQLite database: repository `antifine.db`; override with `ANTIFINE_DB_PATH`.
-- Authorized local source root: repository root; override with `ANTIFINE_WORKSPACE_ROOT`.
-- Private imports/backups/previews/reports: `%LOCALAPPDATA%/AntiFine` on Windows or `~/.local/share/AntiFine`; override with `ANTIFINE_DATA_DIR` outside the checkout. Owner-only POSIX permissions or protected owner/SYSTEM Windows DACLs apply.
-- Uploads expire after 24 hours. File, workspace and total import quotas are enforced. Previews expire after ten minutes. Immutable backups have a 128 MiB quota and require deliberate operator archival when full.
-- `GET /api/findings` reloads persisted evidence. `GET /api/scan/history` lists real runs, including clean/partial runs and coverage. Successfully evaluated files reconcile previous findings; failed files retain evidence. Same-basename files remain distinct.
-- `GET /api/scan/iac/export/sarif` exports current open findings with stable rule IDs, source regions and scan metadata. `POST /api/report/generate` creates private Markdown evidence; authenticated `/api/reports/{filename}` downloads it. Exports do not reconstruct mappings from titles.
-- There is no PDF implementation or PDF endpoint.
-
-Schema version 3 adds identities, scan runs and immutable per-run evidence. Legacy findings/mappings are preserved as legacy/manual-only evidence until rescanned. The privacy migration redacts legacy display fields, securely clears replaced SQLite cells and disables credential-bearing legacy webhook URLs. Close older writers before upgrade and keep any operator-required backup in private storage; reconfigure disabled integrations. No developer database is touched by tests.
-
-## Optional AI and integrations
-
-Set `OLLAMA_ENABLED=true`, `OLLAMA_BASE_URL=http://127.0.0.1:11434`, `OLLAMA_MODEL` and `OLLAMA_TIMEOUT` through the process environment or a local ignored `.env`. AI health, general questions, finding explanations and preview explanations are optional. Finding explanations use persisted metadata; remediation explanations require a current preview. Client-supplied severities and fabricated diffs cannot become authoritative. Contradictory completion/severity claims are withheld. Conversation history is bounded and not persisted as permanent memory.
-
-Webhooks require credential-free HTTPS URLs, port 443 and an exact hostname in `ANTIFINE_WEBHOOK_ALLOWLIST` (comma-separated). Every DNS answer must be public; the validated address is pinned for delivery while retaining TLS hostname/certificate validation. Redirects and inherited proxies are not used. Existing credential-bearing URLs must be reconfigured outside AntiFine, such as through a trusted gateway. Real webhook delivery and live model generation are not part of automated tests.
-
-## Validation
+To check the production bundle locally, run these commands instead of the development server:
 
 ```bash
+npm --prefix frontend run build
+npm --prefix frontend run preview -- --host 127.0.0.1 --port 5173 --strictPort
+```
+
+Vite preview is a local bundle check, not a supported public production hosting configuration.
+
+## Using the workstation
+
+1. Open **Scan** and choose an import or **Server-local path**. Imports are private copies; local-path fixes edit the actual authorized source.
+2. For a safe first run, import [tests/fixtures/public-database.tf](tests/fixtures/public-database.tf). This synthetic fixture produces a public-database finding. Fixing its imported copy leaves the tracked fixture unchanged.
+3. Inspect coverage and open the finding drawer. Search/filters narrow persisted findings; the Secrets view withholds values.
+4. For an eligible finding, choose **Review fix**, inspect the diff, and apply. Preview failure keeps Apply disabled.
+5. Review the rescan and remaining findings, then download Markdown or SARIF from **Reports**.
+
+Server-local paths are relative to `ANTIFINE_WORKSPACE_ROOT`, defaulting to the repository root; `tests/fixtures` selects the example directory. HTTP clients cannot select arbitrary absolute paths outside that root. Containment checks reject escapes, symlinks, junctions/reparse points, and ambiguous Windows path components.
+
+Directory discovery selects supported names/extensions and skips directories such as `.git`, virtual environments, `node_modules`, `dist`, and `build`. Unsupported directory entries are not an inventory of assessed files. A directly selected unsupported file has unsupported/error coverage.
+
+Responses distinguish `completed`, `partial`, and `error`, with per-file `evaluated`, `unsupported`, or `error` states. Completed scans can contain findings; an empty directory can be enumerated without evaluating a file. Read findings and coverage together. Neither case establishes compliance.
+
+The Compliance view shows supplied mappings. Historical charts, durable report browsing, and editable organization/settings policies are incomplete capabilities.
+
+## CLI reference
+
+### Headless severity gate
+
+Run from the repository root:
+
+```bash
+python -m src.cli.gate --help
+python -m src.cli.gate --file Dockerfile.multistage_compliant --fail-on HIGH
+```
+
+The Dockerfile is a gate example; its name does not imply certification. Intermediate-stage informational findings can remain below the threshold. This negative example is expected to exit **1**:
+
+```bash
+python -m src.cli.gate --file tests/fixtures/public-database.tf --fail-on CRITICAL
+```
+
+| Option | Behavior |
+|---|---|
+| `--file PATH` | Required file or directory. CLI paths belong to the invoking OS account; HTTP workspace authorization does not apply. |
+| `--fail-on LOW\|MEDIUM\|HIGH\|CRITICAL` | Minimum severity that fails the gate; default `HIGH`. |
+| `--min-score INTEGER` | Legacy severity-weighted risk heuristic, not a compliance score/certification. Prefer the severity threshold. |
+| `-h`, `--help` | Show usage. |
+
+Exit **0** means evaluated files meet policy. Exit **1** means a threshold violation or unsupported, incomplete, or failed scanning; empty evaluation cannot pass. Argument-parser errors exit **2**. The gate does not persist findings or require HTTP authentication.
+
+### Older orchestration commands
+
+`python -m src.main --help` lists the older command surface, separate from the workstation:
+
+| Option | Current behavior / limitation |
+|---|---|
+| `--init` | Initialize legacy database tables. Repository use triggers schema-v3 migration. |
+| `--audit-iac FILE_OR_DIR` | Scan and persist unless `--dry-run` is supplied. Its exit code is not a severity gate. |
+| `--audit-local` | Run `scripts/port_mapper.sh`; requires Bash and a supported port-listing utility. |
+| `--audit-web URL` | Send active SSRF probes to an authorized target. |
+| `--target-id INTEGER` | Legacy target bookkeeping, default `1`; modern IaC uses repository identities. |
+| `--dry-run` | Avoid audit persistence; does not prevent network probes. |
+| `--report` | Write legacy `compliance_report.md` in the repository, potentially overwriting it. Prefer private workstation export. |
+| `--export-sarif FILE` | Export recorded open findings; choose a private output file. |
+| `--ui`, `--gui` | Older Rich TUI and CustomTkinter GUI. GUI extras are in `requirements-gui.txt`; these are not the primary release-verified React interface. |
+| `--audit` | Full-pipeline placeholder. A successful return does not mean an audit ran. |
+
+`python -m src.cli.ai rebuild-index` rebuilds the static knowledge index under `.antifine/`; it does not create persistent chat memory or AI-generated findings.
+
+## API overview
+
+The API base is `http://127.0.0.1:8000`. Except for health and session bootstrap, requests need the browser session or `X-AntiFine-Token` matching the backend capability.
+
+`POST /api/session` requires an approved local `Origin` and `X-AntiFine-Request: 1`. It sets an HttpOnly, SameSite=Strict cookie scoped to `/api`. The capability is generated per backend process unless `ANTIFINE_API_TOKEN` is configured before startup. Host, Origin, and loopback-peer checks also apply. CORS is not authentication; a hostile process already running under the same OS account is outside this protection model.
+
+### Workstation routes
+
+| Method | Route | Purpose / input |
+|---|---|---|
+| GET | `/api/health` | Unauthenticated liveness. |
+| POST | `/api/session` | Local session bootstrap in middleware. |
+| POST | `/api/scan/upload` | Multipart `files`; optional JSON-array form field `relative_paths`. Returns an opaque workspace ID. |
+| POST | `/api/scan/iac` | JSON `target_path`: authorized relative path or uploaded `workspace_*` ID. Returns status, findings, scan ID, coverage. |
+| GET | `/api/findings` | Persisted current records with lifecycle status. |
+| GET | `/api/findings/secrets` | Open secret findings; safe metadata only. |
+| GET | `/api/scan/history` | Recent runs, including clean/partial runs and coverage. |
+| GET | `/api/dashboard` | Open-finding counts and mapping metadata. |
+| GET | `/api/analytics/dashboard` | Severity/coverage data; compliance score is `null`, trends unavailable. |
+| POST | `/api/scan/iac/remediation/preview` | JSON `finding_id`; source-bound preview. |
+| POST | `/api/scan/iac/remediate` | JSON `finding_id` and current `preview_id`; validate, back up, apply, rescan. |
+| GET | `/api/scan/iac/export/sarif` | Current open findings and coverage as SARIF 2.1.0. |
+| POST | `/api/report/generate` | Create private Markdown; returns `results.markdown.file`. |
+| GET | `/api/reports/{filename}` | Authenticated Markdown download. |
+
+Upload and scanning are separate steps. There is no `/api/scan/iac/upload` route. A server-local scan payload is:
+
+```json
+{"target_path": "tests/fixtures/public-database.tf"}
+```
+
+A native client can use the installed HTTPX dependency. First configure the same `ANTIFINE_API_TOKEN` securely in the backend and client environments; keep its value out of source and command history:
+
+```python
+import os
+import httpx
+
+with httpx.Client(
+    base_url="http://127.0.0.1:8000",
+    headers={"X-AntiFine-Token": os.environ["ANTIFINE_API_TOKEN"]},
+    timeout=60,
+) as api:
+    response = api.post(
+        "/api/scan/iac",
+        json={"target_path": "tests/fixtures/public-database.tf"},
+    )
+    response.raise_for_status()
+    result = response.json()
+    print(result["status"], result["findings_count"], result["coverage"])
+```
+
+For an import, scan the upload response's `target_path`. For a fix, use the finding's backend `id` as `finding_id`, never its title/display path. Validation errors intentionally omit rejected values. Invalid previews return 422; stale/rejected applies return 409. Applicable upload quota failures return 413.
+
+### Optional AI and integration routes
+
+| Method | Route | Purpose / constraint |
+|---|---|---|
+| GET | `/api/ai/health` | Enabled/model/availability state; contacts Ollama only when enabled. |
+| POST | `/api/ai/ask` | `question`, optional context, bounded `messages`; finding context requires a backend `finding_id`. |
+| POST | `/api/ai/findings/explain` | `finding` with backend `id`, optional `code_context`; reloads canonical metadata. |
+| POST | `/api/ai/remediation/explain` | Review request with a current `preview_id`; backend reconstructs authoritative before/after content. |
+| POST | `/api/ai/test` | Bounded, sanitized local developer prompt test; not a remote prompt proxy. |
+| GET / POST | `/api/integrations/webhooks` | List/save allowlisted destinations; save accepts `url` and `min_severity`. |
+| POST | `/api/integrations/test` | Schedule a real synthetic notification; success is not proof of delivery. |
+| POST | `/api/scan/ssrf` | Active probes using `target_url`; observations have partial coverage. Requires authorization to test the target. |
+
+FastAPI's schema describes registered route models; session bootstrap is middleware rather than an OpenAPI operation. Generated documentation/schema paths are also protected by local middleware, not anonymous public endpoints.
+
+## Deterministic remediation
+
+Automatic edits currently cover only these observed booleans:
+
+- Terraform `aws_db_instance.publicly_accessible`: selected `true` to `false`.
+- Kubernetes `securityContext.privileged` and explicit `securityContext.allowPrivilegeEscalation`: selected `true` to `false`.
+
+Missing fields, ambiguous/shared YAML source, unsupported rules, and Docker user/healthcheck changes are manual-only. AntiFine does not invent an account or add `HEALTHCHECK CMD true` as an automatic fix.
+
+A preview binds a persisted finding to its file/resource and source digest. Apply revalidates that source, creates an immutable private backup, uses atomic replacement, and reparses/rescans before persistence. A source edit invalidates the preview. Title-based remediation requests are deliberately rejected.
+
+Removing the selected finding while others remain produces an applied change with `verified: false`. Only a complete zero-finding file rescan is verified. Failed verification attempts to restore original bytes when safe; concurrent external changes prevent an unsafe rollback and require review.
+
+Opaque backups are never silently overwritten and contain original source bytes. Recovery and quota-driven archival are operator filesystem tasks; there is no browser restore endpoint.
+
+## Secret detection and privacy
+
+Implemented signatures cover AWS key forms, GitHub tokens, selected Slack tokens, and private-key headers. Entropy heuristics have false-positive exclusions such as standard UUID/hash formats. Detection does not prove a token is live, and no finding does not prove a file is secret-free.
+
+Central sanitization protects supported display/persistence fields, API responses/errors, previews, logs, exports, and AI context/output. The Secrets view exposes metadata rather than values. Redacted display paths cannot authorize writes. Raw Uvicorn request logging is suppressed in favor of safe route/status logging.
+
+Raw bytes necessarily remain in selected local source files and private copies. Imports and backups stay outside Vite/static roots; keep your own source out of public directories too. Protect these files and keep real credentials out of fixtures and external logs. Pattern/context-based sanitization is conservative, not a formal guarantee for arbitrary hostile text. Preserve those boundaries when adding fields or transports.
+
+## Storage and upgrades
+
+| Data | Default |
+|---|---|
+| SQLite evidence | Repository `antifine.db`; override `ANTIFINE_DB_PATH`. |
+| Authorized local source | Repository root; override `ANTIFINE_WORKSPACE_ROOT`. |
+| Private imports/previews/backups/Markdown | `%LOCALAPPDATA%/AntiFine` on Windows, otherwise `~/.local/share/AntiFine`; override `ANTIFINE_DATA_DIR` outside the checkout. |
+| Static AI knowledge index | Ignored `.antifine/knowledge_index.json`, from bundled rules and `docs/ai/`, not conversations. |
+
+Private storage uses restrictive POSIX permissions or a protected owner/SYSTEM Windows DACL. Imports expire after 24 hours; cleanup runs on upload/workspace access, not a background scheduler. Previews expire after ten minutes; old records are cleaned during preview creation. Backups remain until operator archival. Generated reports have no automatic retention/quota policy.
+
+Schema v3 stores current findings in `scan_results`, runs/coverage in `scan_runs`, and independent per-run snapshots in `scan_evidence`. Finding records carry backend IDs, rule/file/resource metadata, source digests, scan IDs, and regions where available. Workspace-relative identity distinguishes same-basename files. Legacy target/webhook tables remain for compatibility.
+
+Successfully evaluated files reconcile prior open findings, including clean rescans. Failed files retain prior evidence. Removed files are reconciled after a successful complete enumeration of the same scope. The history API returns recent runs; current-finding reports are not full historical snapshot exports.
+
+Before an existing-database upgrade:
+
+1. Stop older writers and keep any required backup in private storage.
+2. Install pinned dependencies and start one upgraded writer to migrate.
+3. Expect legacy findings/mappings to remain non-actionable until rescanned. Privacy migration intentionally redacts unsafe display values and retires credential-bearing legacy webhook URLs; it is not byte-for-byte reversible.
+4. Reconfigure integrations as needed and rescan before automatic remediation.
+
+SQLite secure deletion clears replaced cells during migration. Existing backups, exports, and filesystem snapshots are not retroactively sanitized.
+
+## Reports and exports
+
+- **Markdown:** `POST /api/report/generate`, then authenticated `GET /api/reports/{filename}`. The workstation downloads private evidence containing current open findings, mappings, supported identifiers/locations, and recorded coverage.
+- **SARIF 2.1.0:** `GET /api/scan/iac/export/sarif`. Includes rule IDs, supported regions, finding/scan/resource properties, mappings, and coverage. Regression tests validate against the bundled SARIF schema.
+
+The older CLI's `--export-sarif FILE` exports findings but does not populate the API's scan-coverage collection. Use private output paths and avoid overwriting evidence. Repository example artifacts do not establish current source state.
+
+**PDF generation is not implemented.** There is no PDF endpoint, report queue, or automatic compliance certification.
+
+## Optional Ollama integration
+
+Install/run Ollama locally and make the configured model available before enabling AI. The default `qwen2.5:7b` is configurable; it is not a model recommendation or hardware-sizing claim.
+
+Set the following in the backend process environment or a local ignored `.env` based on [.env.example](.env.example):
+
+```dotenv
+OLLAMA_ENABLED=true
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=qwen2.5:7b
+OLLAMA_TIMEOUT=30
+```
+
+Unset/false `OLLAMA_ENABLED` disables AI; the example file opts in. The Ollama module loads root `.env` without overriding process variables. Restart after configuration changes and keep the model endpoint local.
+
+Finding explanations use backend evidence; remediation explanations need a current preview. Chat history is request-bounded and not permanent memory. Local retrieval uses bundled rule/document knowledge. Sanitization and advisory guards handle supported disclosure/contradiction cases; model prose is never verification evidence.
+
+Disabled generation returns 503; service failures generally return 502. AI health returns availability in its response. AI failure does not disable deterministic scanning or remediation. No autonomous patching or AI commands are implemented.
+
+## Configuration
+
+Set workstation/security variables in the **process environment before Python starts**. Do not rely on the optional Ollama `.env` loader to initialize an API capability or CLI configuration.
+
+| Variable | Default / purpose |
+|---|---|
+| `ANTIFINE_WORKSPACE_ROOT` | Repository root; authorized server-local source. |
+| `ANTIFINE_DB_PATH` | Repository `antifine.db`; SQLite location. |
+| `ANTIFINE_DATA_DIR` | Platform private-data root above; must be outside the checkout. |
+| `ANTIFINE_API_TOKEN` | Unset generates a per-process capability; native clients supply the configured value via `X-AntiFine-Token`. Never embed it in frontend code. |
+| `ANTIFINE_WEBHOOK_ALLOWLIST` | Empty disables destinations; comma-separated exact hostnames, no wildcards. |
+| `OLLAMA_ENABLED` | `false`; explicit model-request opt-in. |
+| `OLLAMA_BASE_URL` | `http://127.0.0.1:11434`. |
+| `OLLAMA_MODEL` | `qwen2.5:7b`. |
+| `OLLAMA_TIMEOUT` | 30 seconds; minimum parsed value 0.1 seconds. |
+| `ANTIFINE_BASH` | Optional Bash executable override for the older local port mapper. |
+| `ANTIFINE_TEST_PYTHON` | Playwright backend interpreter; default `python`. Current command construction requires an override path without spaces. |
+| `ANTIFINE_E2E_MANIFEST` | Browser-test runtime manifest; defaults to a temporary filename. Contains synthetic fixture locations. |
+| `ANTIFINE_E2E_OUTPUT` | Playwright artifacts; defaults to OS temporary storage. |
+
+`ANTIFINE_TESTING` is an internal TestClient peer/Host switch; do not enable it for normal operation.
+
+Fixed limits include 2 MiB per source/uploaded file, 100 files and 16 MiB per imported workspace, 128 MiB total import bytes, 17 MiB per upload request, and 256 KiB for other bodies. Source scans select at most 500 files, 32 MiB aggregate content, and 2,000 aggregate findings. Workers have bounded concurrency, a ten-second per-file wall timeout, and OS memory/CPU budgets. Backups have a separate 128 MiB quota. These are code constants, not environment-tunable settings.
+
+Webhooks require credential-free HTTPS/443, no query/fragment, an exact allowlisted host, and public DNS answers. Delivery revalidates DNS and pins a validated IP while retaining TLS hostname/certificate checks. Redirects are rejected; the transport does not inherit proxies. Secret-bearing paths are unsuitable; use an operator-controlled gateway for authentication. Integration test calls schedule real notifications.
+
+## Testing and CI
+
+From the repository root with development dependencies installed:
+
+```bash
+python -m pip check
 python -m pytest -q
+npm --prefix frontend run lint
+npm --prefix frontend run typecheck
+npm --prefix frontend run build
+npm --prefix frontend audit
+```
+
+For browser workflows, activate the Python environment in the launching terminal. Stop workstation services on 8000/5173 first: the harness refuses to reuse them.
+
+```bash
 cd frontend
-npm run lint
-npm run typecheck
-npm run build
 npx playwright install chromium
 npm run test:e2e -- --repeat-each=2
-npm audit
 ```
 
-Playwright launches isolated real backend storage and the built frontend preview. Its workflows cover local and nested imports, preview rejection, apply/backup/rescan, refresh, source confidentiality, keyboard navigation, supported widths, history filters and report errors. The backend suite covers scanner bypasses, hostile YAML, process limits, migrations, redaction, exact/stale remediation, exports and CLI policy.
+Linux CI uses `npx playwright install --with-deps chromium` for system dependencies; this can need appropriate package-install permissions.
 
-Release commits include reviewed source, tests, migrations, configuration, dependency locks and documentation. Local credentials, databases, generated evidence, backups and temporary workspaces are excluded; preserve unrelated working-tree edits when preparing a release.
+pytest configures temporary database/workspace/private roots before app imports. Playwright starts an isolated real API and built frontend preview with synthetic fixtures; failure artifacts go to temporary storage. Cases cover scans, nested imports, preview rejection, exact apply/backup/rescan, reload, source confidentiality, navigation/filters, keyboard/responsive behavior, and report errors. AI/webhook security tests use mocks rather than live generation or external delivery.
 
-See [the remediation record](docs/SECURITY_REMEDIATION.md) for the A01–A16 matrix and verification limits, [the handoff](docs/CODEX_HANDOFF.md) for module ownership and [DESIGN.md](DESIGN.md) for UI guidance.
+The [release workflow](.github/workflows/security.yml) defines Windows/Linux Python 3.12/3.14 backend/CLI jobs and Linux Node 24 lint/typecheck/build/repeated-browser checks. A workflow definition is not a passing remote run; check GitHub Actions for the specific commit.
+
+Local audit-release evidence records **115 backend passes, one Windows symlink-privilege skip, and 12 repeated browser passes**. The actual Windows junction test passed. [The A01-A16 implementation record](docs/SECURITY_REMEDIATION.md) describes fixes, evidence, and unverified environments. Current runs remain authoritative.
+
+## Security considerations and limitations
+
+- Run on loopback under a trusted local account. Public hosting, remote reverse proxies, multi-user authentication, and hostile same-user/administrator isolation are unsupported.
+- Bounded parsers/workers, path revalidation, locks, and atomic writes reduce risk; they are not a formal OS sandbox or proof that every race is eliminated.
+- Static checks/mappings do not establish deployed security, full CIS/PCI DSS coverage, complete Kubernetes PSS compliance, or certification. Unsupported/unevaluated input cannot satisfy the CLI gate or remediation verification.
+- Protect sources, backups, database copies, exports, and configuration. Secret detection/redaction have false-positive and false-negative limits.
+- Network probes and webhooks can leave the workstation; use authorized targets. Local tests do not establish live Ollama, external delivery, or every CI platform's behavior.
+- Docker automatic fixes, PDF reports, a complete audit orchestrator, comprehensive history/analytics/report management, and autonomous AI remediation are not implemented.
+
+## Contributing
+
+Read [AGENTS.md](AGENTS.md), [.github/copilot-instructions.md](.github/copilot-instructions.md), and the relevant [security skill](.github/skills/) before specialized changes. [DESIGN.md](DESIGN.md) governs frontend work. [docs/CODEX_HANDOFF.md](docs/CODEX_HANDOFF.md) explains module ownership and compatibility.
+
+Use a feature branch, synthetic reproductions, focused regression tests, and relevant validation results. Preserve deterministic rule ownership, explicit identities, source-bound fixes, and advisory-only AI. Document schema/API migrations. Never commit real credentials, local databases, generated reports, backups, or temporary source; preserve unrelated edits when staging.
+
+Use repository issues or pull requests for reproducible defects, with private source/secrets removed. No separate contribution policy or security-reporting contact is specified here.
+
+## License
+
+No `LICENSE` file is present in this repository. Licensing information has not been specified.

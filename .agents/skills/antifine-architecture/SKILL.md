@@ -11,6 +11,8 @@ This skill provides a deep dive into the AntiFine IaC scanning tool. Use this co
 
 Read `docs/CODEX_HANDOFF.md` and `docs/SECURITY_REMEDIATION.md` for the schema-v3 implementation and verified A01–A16 behavior.
 
+`README.md` is the public entry point for verified setup, CLI/API contracts, supported checks, storage/migration behavior and explicit limitations. Keep its coverage claims tied to source: directory discovery selects supported entries, automatic fixes cover only allowlisted observed booleans, and older CLI/UI surfaces are distinct from the release-verified workstation.
+
 - FastAPI composes thin core/integration routes and optional AI endpoints. Local security middleware requires a per-launch capability and loopback/Host/Origin validation.
 - Private workspaces live outside web roots. Filesystem operations reject path escapes, links, junctions, reparse points and ambiguous Windows names, and revalidate reads/writes.
 - Scan workers have bounded bytes, nodes, depth, documents, file/finding counts, concurrency, wall time, CPU and memory. Deterministic findings have explicit rule IDs, file IDs, resource locators, source regions, digests and stable IDs.
