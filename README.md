@@ -6,6 +6,8 @@ The scanner owns findings, severity, compliance mappings, and remediation eligib
 
 AntiFine is intended for a trusted local workstation. It is not a hosted multi-user service or a complete compliance assessment.
 
+For a detailed explanation of its purpose, intended users, workflow, architecture, current maturity and development priorities, read the [project overview](docs/PROJECT_OVERVIEW.md).
+
 ## Contents
 
 - [Features and coverage](#features-and-coverage)

@@ -11,6 +11,8 @@ This skill provides a deep dive into the AntiFine IaC scanning tool. Use this co
 
 Read `docs/CODEX_HANDOFF.md` and `docs/SECURITY_REMEDIATION.md` for the schema-v4 implementation and verified A01–A16 behavior.
 
+`docs/PROJECT_OVERVIEW.md` explains the product purpose, intended users, supported workflow, architecture, recorded validation and maturity limits. Keep its capability claims and dated evidence consistent with the implementation and `docs/PRODUCT_ROADMAP.md`.
+
 `README.md` is the public entry point for verified setup, CLI/API contracts, supported checks, storage/migration behavior and explicit limitations. Keep its coverage claims tied to source: directory discovery inventories unsupported entries with explicit coverage, automatic fixes cover only allowlisted observed booleans, and older CLI/UI surfaces are distinct from the release-verified workstation.
 
 - FastAPI composes thin core/integration routes and optional AI endpoints. Local security middleware requires a per-launch capability and loopback/Host/Origin validation.
