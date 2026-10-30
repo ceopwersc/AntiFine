@@ -181,7 +181,8 @@ async def sarif():
     values = await run_in_threadpool(repository().findings, open_only=True)
     runs = await run_in_threadpool(repository().history)
     events = await run_in_threadpool(repository().remediations)
-    return generate_sarif([f | {"vulnerability_type": f["rule_name"], "target": f["file"]} for f in values], coverage=runs, remediations=events)
+    restorations = await run_in_threadpool(repository().restorations)
+    return generate_sarif([f | {"vulnerability_type": f["rule_name"], "target": f["file"]} for f in values], coverage=runs, remediations=events, restorations=restorations)
 
 
 @router.post("/api/report/generate")

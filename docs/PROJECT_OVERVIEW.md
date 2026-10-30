@@ -1,6 +1,8 @@
 # AntiFine project overview
 
-Reviewed: 30 October 2026. Application baseline: Sprint 1, commit [`e0da954`](https://github.com/ceopwersc/AntiFine/commit/e0da954be83e2b5eeea8e5b30da584bbcbba1f61).
+Reviewed: 31 October 2026. Historical Sprint 1 application baseline: commit [`e0da954`](https://github.com/ceopwersc/AntiFine/commit/e0da954be83e2b5eeea8e5b30da584bbcbba1f61).
+
+The current implementation also includes [Sprint 2 safe recovery](SAFE_RECOVERY.md): guarded backup inspection, confirmed restoration and separate rescan/audit evidence. Historical validation below remains tied to its stated commit.
 
 ## 1. What is AntiFine?
 
@@ -104,7 +106,7 @@ A preview is bound to both source and candidate digests. If the source changes a
 | Local API | Python, FastAPI, Pydantic and Uvicorn; request validation, session authorization and orchestration | [src/api](../src/api/) |
 | Deterministic analysis | Terraform HCL/Lark, bounded YAML/JSON handling, Docker parsing and secret rules | [src/scanners](../src/scanners/) |
 | Application services | Filesystem boundaries, private workspaces, worker limits, scan lifecycle and approved remediation | [src/services](../src/services/) |
-| Persistence | SQLite with additive schema v4 migrations and transactional evidence updates | [scan_repository.py](../src/services/scan_repository.py), [database](../database/) |
+| Persistence | SQLite with additive schema v5 migrations and transactional evidence updates | [scan_repository.py](../src/services/scan_repository.py), [database](../database/) |
 | Reporting | Markdown evidence and SARIF 2.1.0 for downstream code-scanning tools | [src/reporting](../src/reporting/) |
 | Optional explanation | Local Ollama, sanitized context and retrieval from bundled documentation | [src/ai](../src/ai/), [ollama_service.py](../src/services/ollama_service.py) |
 | Validation | pytest, JSON Schema, Oxlint, TypeScript, Playwright and GitHub Actions | [tests](../tests/), [browser tests](../frontend/tests/e2e/), [CI workflow](../.github/workflows/security.yml) |
@@ -121,10 +123,11 @@ SQLite separates several kinds of state:
 - `scan_runs`: identifiable scan runs and coverage.
 - `scan_evidence`: independent per-run finding snapshots.
 - `remediation_runs`: immutable approval, pending-verification and final outcome events.
+- `restoration_runs`: separate confirmed restoration, pending/final outcome and rescan events.
 
 Findings include machine-readable rule IDs, opaque file/finding IDs, source locations/digests and resource metadata. Supported Terraform resource-address keys retain finding identity when declarations are reordered within the same workspace/file. Reimporting a project creates a new workspace identity.
 
-The interface distinguishes open findings, automatic-fix availability, manual action, pending verification, verified resolution, resolution with remaining findings and failed verification. A later scan can also reopen a finding. These states describe recorded evidence rather than continuously monitored live infrastructure.
+The interface distinguishes open findings, automatic-fix availability, manual action, pending verification, verified resolution, resolution with remaining findings and failed verification. A later scan or confirmed restoration can also reopen a finding. Recovery shows Needs review when ownership or interrupted-operation state cannot be proven safe. These states describe recorded evidence rather than continuously monitored live infrastructure.
 
 Source imports, previews, original-byte backups and generated reports live outside frontend/static roots. By default, private storage is under `%LOCALAPPDATA%/AntiFine` on Windows or `~/.local/share/AntiFine` elsewhere. The default database is the repository's local `antifine.db`; environment variables can change these locations.
 
@@ -183,13 +186,13 @@ The workflow tests cover public RDS remediation through evidence export, identic
 | Rule coverage | Selected AWS, Docker, Kubernetes and secret checks; no complete framework or deployed-environment assessment |
 | Automatic fixes | Only the supported observed booleans above; other findings need an operator-derived change |
 | Imported projects | Fixes affect a private copy; there is no deliberate export-back workflow to update the original checkout |
-| Recovery | Backup inspection/restore and quota archival are manual; interrupted pending operations require review |
+| Recovery | Guarded inspection/confirmed restoration is implemented; legacy/unprovable ownership, interrupted states and quota archival still require manual review |
 | Project/history management | Reimports create new identities, histories are bounded and current exports are not full historical snapshot exports |
 | Evidence management | Unsigned artifacts, manual report retention, no PDF implementation or complete report-browsing UI |
 | Shared operation | No enterprise SSO/RBAC, hosted multi-user isolation or supported public deployment |
 | Commercial packaging | Billing and enterprise administration are deferred; the README records that licensing is unspecified and no LICENSE file is present |
 
-The immediate product direction in the [roadmap](PRODUCT_ROADMAP.md) is recovery and project lifecycle: backup inspection/restore, interrupted-operation reconciliation, clearer expired-import handling, project-scoped history and deliberate export of approved imported changes back to the operator's repository.
+The immediate product direction in the [roadmap](PRODUCT_ROADMAP.md) continues project lifecycle after guarded restoration: reviewed interrupted-operation reconciliation, clearer expired-import handling, project-scoped history and deliberate export of approved imported changes back to the operator's repository.
 
 Representative project pilots can then measure false positives, coverage boundaries and time from finding to verified correction. Broader rules should retain exact identity, safe failure states and meaningful regression evidence.
 
@@ -225,6 +228,7 @@ This vulnerable example is expected to fail the gate. A gate success means evalu
 ## 14. Further reading
 
 - [README](../README.md): supported installation, configuration, CLI/API contracts and operating limits.
+- [Safe recovery](SAFE_RECOVERY.md): guarded restore contracts, ownership/version checks, interruption states and recovery limits.
 - [Product roadmap](PRODUCT_ROADMAP.md): Sprint 1 scope, verification, next priorities and deferred capabilities.
 - [Engineering handoff](CODEX_HANDOFF.md): module ownership, trust boundaries and compatibility.
 - [Security remediation record](SECURITY_REMEDIATION.md): A01–A16 implementation matrix and historical evidence.

@@ -19,6 +19,7 @@ For a detailed explanation of its purpose, intended users, workflow, architectur
 - [CLI reference](#cli-reference)
 - [API overview](#api-overview)
 - [Deterministic remediation](#deterministic-remediation)
+- [Safe recovery](docs/SAFE_RECOVERY.md)
 - [Secret detection and privacy](#secret-detection-and-privacy)
 - [Storage and upgrades](#storage-and-upgrades)
 - [Reports and exports](#reports-and-exports)
@@ -32,7 +33,7 @@ For a detailed explanation of its purpose, intended users, workflow, architectur
 
 ## Features and coverage
 
-The workstation provides project-folder/file imports, a private synthetic Terraform demo, authorized local-path scans, severity/file/status/rule-family filters, resource evidence, focused source diffs, explicit approval, persistent verification history, Markdown reports, and SARIF exports. Findings reload from the backend after a browser refresh. Dialogs support keyboard focus and Escape dismissal.
+The workstation provides project-folder/file imports, a private synthetic Terraform demo, authorized local-path scans, severity/file/status/rule-family filters, resource evidence, focused source diffs, explicit approval, persistent verification history, guarded backup inspection/restoration, Markdown reports, and SARIF exports. Findings reload from the backend after a browser refresh. Dialogs support keyboard focus and Escape dismissal.
 
 | Input | Implemented checks | Limits |
 |---|---|---|
@@ -99,10 +100,10 @@ Dependencies are pinned in [requirements.lock](requirements.lock), [requirements
 
 ## Installation
 
-Clone the branch containing this implementation:
+Clone the repository main branch:
 
 ```bash
-git clone --branch codex/sprint-1-workflow https://github.com/ceopwersc/AntiFine.git
+git clone --branch main https://github.com/ceopwersc/AntiFine.git
 cd AntiFine
 ```
 
@@ -212,7 +213,7 @@ Exit **0** means evaluated files meet policy. Exit **1** means a threshold viola
 
 | Option | Current behavior / limitation |
 |---|---|
-| `--init` | Initialize legacy database tables. Repository use triggers schema-v4 migration. |
+| `--init` | Initialize legacy database tables. Repository use triggers schema-v5 migration. |
 | `--audit-iac FILE_OR_DIR` | Scan and persist unless `--dry-run` is supplied. Its exit code is not a severity gate. |
 | `--audit-local` | Run `scripts/port_mapper.sh`; requires Bash and a supported port-listing utility. |
 | `--audit-web URL` | Send active SSRF probes to an authorized target. |
@@ -243,6 +244,11 @@ The API base is `http://127.0.0.1:8000`. Except for health and session bootstrap
 | GET | `/api/findings` | Persisted current records, resource evidence, lifecycle and verification status. |
 | POST | `/api/findings/{finding_id}/rescan` | Read-only rescan using persisted backend file identity; rejects caller paths. |
 | GET | `/api/remediations` | Recent immutable approved pending/final remediation events. |
+| GET | `/api/backups` | Recent owned backup inspections and current restore safety. |
+| GET | `/api/backups/{backup_id}` | Sanitized metadata/diff and availability; no raw backup path/download. |
+| POST | `/api/backups/{backup_id}/restore/preview` | Create a current source/owner/backup-bound restore review. |
+| POST | `/api/backups/{backup_id}/restore` | Strict `confirmed: true` and restore `preview_id`; preserve safety copy, restore, rescan and record separate evidence. |
+| GET | `/api/restorations` | Recent immutable restoration events; restoration is never security verification. |
 | GET | `/api/findings/secrets` | Open secret findings; safe metadata only. |
 | GET | `/api/scan/history` | Recent runs, including clean/partial runs and coverage. |
 | GET | `/api/dashboard` | Open-finding counts and mapping metadata. |
@@ -309,7 +315,7 @@ A preview binds a persisted finding to its file/resource, source digest and cand
 
 Removing the selected finding while others remain records `resolved_with_findings` with `verified: false`. Only the original finding is resolved; the file retains its remaining findings. Introduced findings reject the operation and trigger rollback. Only a complete zero-finding file rescan is verified. Failed verification attempts to restore original bytes when safe; concurrent external changes prevent an unsafe rollback and require review.
 
-Opaque backups are never silently overwritten and contain original source bytes. Recovery and quota-driven archival are operator filesystem tasks; there is no browser restore endpoint.
+Opaque backups are never silently overwritten and contain original source bytes. The **Recovery** screen inspects recorded backups and provides an explicitly confirmed, source-version-bound restore with a safety copy and deterministic rescan. Restoring insecure originals can reopen findings and is never a verified security remediation. Legacy backups without provable ownership and interrupted/ambiguous operations show **Needs review**. Quota-driven archival and ambiguous-state reconciliation remain manual. See [safe recovery](docs/SAFE_RECOVERY.md) for contracts and limits.
 
 ## Secret detection and privacy
 
@@ -330,9 +336,9 @@ Raw bytes necessarily remain in selected local source files and private copies. 
 
 Private storage uses restrictive POSIX permissions or a protected owner/SYSTEM Windows DACL. Imports expire after 24 hours; cleanup runs on upload/workspace access, not a background scheduler. Previews expire after ten minutes; old records are cleaned during preview creation. Backups remain until operator archival. Generated reports have no automatic retention/quota policy.
 
-Schema v4 stores current findings in `scan_results`, runs/coverage in `scan_runs`, independent per-run snapshots in `scan_evidence`, and immutable approval/verification events in `remediation_runs`. The additive v3-to-v4 migration preserves existing run evidence. Newly scanned Terraform resources have semantic address keys stable across resource reordering; ambiguous duplicate addresses fail closed. Legacy rows need a rescan to acquire the new metadata. Finding records carry backend IDs, rule/file/resource metadata, source digests, scan IDs, and regions where available. Workspace-relative identity distinguishes same-basename files. Legacy target/webhook tables remain for compatibility.
+Schema v5 stores current findings in `scan_results`, runs/coverage in `scan_runs`, independent per-run snapshots in `scan_evidence`, immutable approval/verification events in `remediation_runs`, and separate restoration events in `restoration_runs`. The additive v4-to-v5 migration preserves existing evidence. The additive v3-to-v4 migration preserves existing run evidence. Newly scanned Terraform resources have semantic address keys stable across resource reordering; ambiguous duplicate addresses fail closed. Legacy rows need a rescan to acquire the new metadata. Finding records carry backend IDs, rule/file/resource metadata, source digests, scan IDs, and regions where available. Workspace-relative identity distinguishes same-basename files. Legacy target/webhook tables remain for compatibility.
 
-Successfully evaluated files reconcile prior open findings, including clean rescans. Failed files retain prior evidence. Removed files are reconciled after a successful complete enumeration of the same scope. The history and remediation APIs return their latest 100 records; current-finding reports are not full historical snapshot exports. Verification states include pending, verified resolved, resolved with findings, verification failed, rescan resolved and reopened. They describe recorded evidence, not live deployed state. A crash after a durable pending event leaves verification pending for operator review; there is no automatic crash recovery or restore UI.
+Successfully evaluated files reconcile prior open findings, including clean rescans. Failed files retain prior evidence. Removed files are reconciled after a successful complete enumeration of the same scope. The history and remediation APIs return their latest 100 records; current-finding reports are not full historical snapshot exports. Verification states include pending, verified resolved, resolved with findings, verification failed, rescan resolved and reopened. They describe recorded evidence, not live deployed state. A crash after a durable pending event shows **Needs review** and blocks further automated writes on that file. Recovery never infers success, force-clears stale locks or performs destructive automatic reconciliation.
 
 Before an existing-database upgrade:
 
@@ -345,10 +351,10 @@ SQLite secure deletion clears replaced cells during migration. Existing backups,
 
 ## Reports and exports
 
-- **Markdown:** `POST /api/report/generate`, then authenticated `GET /api/reports/{filename}`. The workstation downloads private evidence containing current open findings, mappings, supported identifiers/locations, recorded coverage, and immutable remediation history with backup and verification scan identifiers.
-- **SARIF 2.1.0:** `GET /api/scan/iac/export/sarif`. Includes rule IDs, supported regions, finding/scan/resource properties, mappings, coverage and remediation history. Regression tests validate against the bundled SARIF schema.
+- **Markdown:** `POST /api/report/generate`, then authenticated `GET /api/reports/{filename}`. The workstation downloads private evidence containing current open findings, mappings, supported identifiers/locations, recorded coverage, and immutable remediation/restoration history with backup and rescan identifiers.
+- **SARIF 2.1.0:** `GET /api/scan/iac/export/sarif`. Includes rule IDs, supported regions, finding/scan/resource properties, mappings, coverage and remediation/restoration history. Regression tests validate against the bundled SARIF schema.
 
-The older CLI's `--export-sarif FILE` exports findings but does not populate the API's scan-coverage collection. Use private output paths and avoid overwriting evidence. Generated reports are ignored local outputs rather than versioned evidence of current source state.
+The older CLI's `--export-sarif FILE` exports findings but does not include the workstation API's scan-coverage or remediation/restoration-history collections. Use private output paths and avoid overwriting evidence. Generated reports are ignored local outputs rather than versioned evidence of current source state.
 
 **PDF generation is not implemented.** There is no PDF endpoint, report queue, or automatic compliance certification.
 
@@ -424,7 +430,7 @@ pytest configures temporary database/workspace/private roots before app imports.
 
 The [release workflow](.github/workflows/security.yml) defines Windows/Linux Python 3.12/3.14 backend/CLI jobs and Linux Node 24 lint/typecheck/build/repeated-browser checks. A workflow definition is not a passing remote run; check GitHub Actions for the specific commit.
 
-Historical audit-release evidence recorded **115 backend passes, one Windows symlink-privilege skip, and 12 repeated browser passes**. Sprint 1 validation and product scope are recorded in [the product roadmap](docs/PRODUCT_ROADMAP.md). The actual Windows junction test passed. [The A01-A16 implementation record](docs/SECURITY_REMEDIATION.md) describes fixes, evidence, and unverified environments. Current runs remain authoritative.
+Historical audit-release evidence recorded **115 backend passes, one Windows symlink-privilege skip, and 12 repeated browser passes**. Sprint 1 validation and product scope are recorded in [the product roadmap](docs/PRODUCT_ROADMAP.md). Sprint 2 adds the [safe recovery workflow and regression coverage](docs/SAFE_RECOVERY.md). The actual Windows junction test passed. [The A01-A16 implementation record](docs/SECURITY_REMEDIATION.md) describes fixes, evidence, and unverified environments. Current runs remain authoritative.
 
 ## Security considerations and limitations
 

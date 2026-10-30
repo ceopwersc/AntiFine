@@ -9,7 +9,7 @@ This skill provides a deep dive into the AntiFine IaC scanning tool. Use this co
 
 ## 1. Current architecture
 
-Read `docs/CODEX_HANDOFF.md` and `docs/SECURITY_REMEDIATION.md` for the schema-v4 implementation and verified A01–A16 behavior.
+Read `docs/CODEX_HANDOFF.md` and `docs/SECURITY_REMEDIATION.md` for the schema-v5 implementation and verified A01–A16 behavior.
 
 `docs/PROJECT_OVERVIEW.md` explains the product purpose, intended users, supported workflow, architecture, recorded validation and maturity limits. Keep its capability claims and dated evidence consistent with the implementation and `docs/PRODUCT_ROADMAP.md`.
 
@@ -19,7 +19,7 @@ Read `docs/CODEX_HANDOFF.md` and `docs/SECURITY_REMEDIATION.md` for the schema-v
 - Private workspaces live outside web roots. Filesystem operations reject path escapes, links, junctions, reparse points and ambiguous Windows names, and revalidate reads/writes.
 - Windows short-name aliases are canonicalized only after checking original path components for reparse traversal. Real short-name and prefix-sibling filesystem regressions cover this boundary.
 - Scan workers have bounded bytes, nodes, depth, documents, file/finding counts, concurrency, wall time, CPU and memory. Deterministic findings have explicit rule IDs, file IDs, resource locators, source regions, digests and stable IDs.
-- SQLite schema v4 preserves legacy evidence, adds scan-run history, reconciles evaluated files transactionally, preserves failed-file evidence, and records independent run snapshots and immutable approval/verification events in remediation_runs. The additive v3 migration retains history; enumeration completeness is independent of unsupported-file coverage. Privacy migration scrubs legacy display values and retires credential-bearing integrations without reconstructing mappings.
+- SQLite schema v5 preserves legacy evidence, adds scan-run history, reconciles evaluated files transactionally, preserves failed-file evidence, and records independent run snapshots and immutable approval/verification events in remediation_runs. The additive v3 migration retains history; enumeration completeness is independent of unsupported-file coverage. Privacy migration scrubs legacy display values and retires credential-bearing integrations without reconstructing mappings.
 - Preview/apply uses a real persisted finding plus a current preview ID. A bounded sanitized unified diff binds source and candidate digests. Pending evidence precedes writes; final evidence commits with the rescan; introduced findings trigger rollback. Exact parsed scalar fixes are limited to selected RDS/Kubernetes cases. Docker fixes and shared/ambiguous YAML source are manual-only. Backups are private, immutable and versioned; writes are atomic with deterministic verification and rollback.
 - Frontend workflow components and hooks use typed backend identities and persisted reload; client display values never authorize edits.
 - SARIF and Markdown use persisted source/mapping/scan evidence; PDF is absent. Mapping and risk heuristics are not compliance certification.
@@ -46,3 +46,7 @@ Uploads use `/api/scan/upload`; scan accepts an authorized relative target or pr
 Terraform rules live in `terraform_rules.py`; explicit rule descriptions/evidence defaults live in `rule_catalog.py`. Resource-address hashes keep supported Terraform finding identities stable when declarations move. Duplicate addresses fail closed. CLI gates reject unsupported/partial input unless `--allow-unsupported` explicitly chooses supported-only coverage with no errors.
 
 `remediation_preview.py` builds bounded review excerpts; `remediation_apply.py` owns approved backup/write/rescan/evidence. `POST /api/scan/demo` copies only the bundled dev/prod fixtures into private storage. `POST /api/findings/{id}/rescan` uses backend file identity. FindingsPanel, FindingDrawer, CoveragePanel and RemediationModal present actual persisted state; source display paths never authorize writes. Approval starts unchecked on each mounted preview. See `docs/PRODUCT_ROADMAP.md` for limitations and validation.
+
+## 6. Sprint 2 recovery
+
+Read `docs/SAFE_RECOVERY.md`. Backup I/O is centralized in `backup_store.py`; new remediation records bind workspace/root ownership. `recovery_inspection.py` resolves backend file identity and version/integrity; `restoration_service.py` requires explicit current-preview confirmation, creates a safety backup, reuses the file lock and atomic write, and persists real rescans with separate `restoration_runs` events. Restore never implies security verification. Legacy/unprovable ownership, interrupted events, stale locks or changed source fail closed as Needs review; no automatic force-clear/reconciliation exists. New Recovery UI/API is additive; schema-v4 evidence is preserved by migration to v5. Keep AI outside recovery authority.

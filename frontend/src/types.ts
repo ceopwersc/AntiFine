@@ -39,6 +39,8 @@ export interface Finding {
   family: string;
   evidence: string;
   verification: Verification;
+  recovery_state?: 'not_requested' | 'needs_review' | 'restored';
+  restoration?: RestorationEvent | null;
   line: number;
   description: string;
   remediation: string;
@@ -78,15 +80,41 @@ export function normalizeFinding(item: BackendFinding): Finding {
 }
 
 export function findingState(finding: Finding): string {
+  if (finding.recovery_state === 'needs_review' || finding.verification.state === 'verification_pending') return 'Needs review';
+  if (finding.status === 'Open' && finding.restoration?.status === 'restored') return 'Reopened after restore';
   if (finding.status === 'Resolved') {
     if (finding.verification.state === 'verified_resolved') return 'Verified resolved';
     if (finding.verification.state === 'resolved_with_findings') return 'Resolved; findings remain';
     return 'Resolved by rescan';
   }
-  if (finding.verification.state === 'verification_pending') return 'Verification pending';
   if (finding.verification.state === 'verification_failed') return 'Verification failed';
   if (finding.status !== 'Open') return finding.status;
   return finding.remediation_eligible ? 'Fix available' : 'Manual action required';
 }
 
-export type Page = 'overview' | 'scan' | 'findings' | 'compliance' | 'secrets' | 'history' | 'reports' | 'ai' | 'settings';
+export interface RestorationEvent {
+  id: string; restoration_id: string; backup_id: string; remediation_id: string;
+  finding_id: string; file_id: string; workspace_id: string; file: string;
+  status: 'restore_pending' | 'restored' | 'restore_failed' | 'restore_needs_review';
+  scan_id: string; pre_restore_backup_id: string; findings_count: number | null;
+  finding_reopened: boolean; verified: false; recorded_at: string; rollback_completed?: boolean;
+}
+
+export interface BackupInspection {
+  backup_id: string; remediation_id: string; finding_id: string; file_id: string; workspace_id: string;
+  file: string; rule_id: string; resource_label: string; remediated_at: string; remediation_status: string;
+  original_digest: string; remediated_digest: string; current_digest: string | null;
+  backup_status: 'available' | 'missing' | 'corrupt' | 'unavailable'; backup_available: boolean;
+  state: 'needs_review' | 'restorable' | 'restored'; can_restore: boolean; reason: string; warning: string;
+  changes: {before: string; after: string; diff: string; start_line: number; end_line: number; changed_line: number} | null;
+  restoration: RestorationEvent | null;
+}
+
+export interface RestorePreview extends BackupInspection {preview_id: string}
+export interface RestoreResult {
+  status: 'restored'; restoration_id: string; backup_id: string; pre_restore_backup_id: string;
+  scan_id: string; findings_count: number; finding_reopened: boolean; verified: false;
+  coverage: FileCoverage[]; warning: string;
+}
+
+export type Page = 'overview' | 'scan' | 'findings' | 'compliance' | 'secrets' | 'history' | 'recovery' | 'reports' | 'ai' | 'settings';

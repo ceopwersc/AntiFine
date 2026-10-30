@@ -1,4 +1,4 @@
-# AntiFine engineering handoff — 24 October 2026
+# AntiFine engineering handoff — 31 October 2026
 
 The A01–A16 implementation replaces the unsafe title/path workflow with backend-owned finding identities, source-bound previews, private immutable backups and deterministic persisted verification. See `docs/SECURITY_REMEDIATION.md` for the full remediation matrix and test evidence.
 
@@ -11,7 +11,7 @@ The A01–A16 implementation replaces the unsafe title/path workflow with backen
 - `src/services/filesystem.py`: resolved ancestry, pre-normalization component checks, reparse/link rejection and bounded, revalidated source reads.
 - `src/services/workspaces.py`, `private_permissions.py`: private imports, quotas, expiration and POSIX/Windows permissions.
 - `src/services/scanning.py`, `scan_worker.py`, `worker_limits.py`: coverage-aware orchestration in killable workers; CPU, wall-time, memory, byte, file and finding bounds.
-- `src/services/scan_repository.py`: additive schema v4, transactional current findings and independent scan-run/evidence history; privacy migration for legacy display fields/integrations.
+- `src/services/scan_repository.py`: additive schema v5, transactional current findings and independent scan-run/evidence history; privacy migration for legacy display fields/integrations.
 - `src/scanners/iac_audit.py`, `terraform_rules.py`, `rule_catalog.py`, `kubernetes_rules.py`, `structures.py`, `secret_scanner.py`: explicit deterministic rule IDs, exact parsed source spans, bounded YAML and supported secret parsing.
 - `src/services/remediation_service.py`, `remediation_preview.py`, `remediation_apply.py`, `src/scanners/remediation.py`: current finding/preview authorization, exact scalar candidate, immutable backups, concurrency guard, atomic write and rollback/verification.
 - `src/reporting/`: persisted evidence/mappings, stable SARIF rule IDs/regions and Markdown coverage. PDF is absent.
@@ -38,4 +38,8 @@ Live Ollama/webhook delivery, formal framework certification, a Terraform plan e
 
 ## Sprint 1 extension
 
-Terraform semantic resource keys, unsupported-file/rule-family coverage, a private safe demo, explicit approval and immutable pending/final verification events now support the complete local workflow. The v3-to-v4 migration preserves earlier findings and scan snapshots. Read `docs/PRODUCT_ROADMAP.md` for the current scope, actual validation and deferred work. A pending event after a crash requires operator review; there is no automatic restore or crash recovery UI.
+Terraform semantic resource keys, unsupported-file/rule-family coverage, a private safe demo, explicit approval and immutable pending/final verification events now support the complete local workflow. The v3-to-v4 migration preserves earlier findings and scan snapshots. Read `docs/PRODUCT_ROADMAP.md` for the current scope, actual validation and deferred work. A pending event after a crash requires operator review; the Recovery screen provides guarded confirmed restoration, while ambiguous crash recovery still requires manual review.
+
+## Sprint 2 recovery
+
+`src/services/backup_store.py` owns bounded immutable backup I/O. New remediation events include workspace/root ownership; legacy backups without that binding are inspectable but require manual recovery. `recovery_inspection.py`, `restoration_service.py` and `src/api/recovery_routes.py` add source-bound review/confirmation, safety copies, shared locks/atomic writes, real rescans and separate restoration events in schema v5. `RecoveryPage.tsx` presents metadata/diffs and explicit confirmation. Restoring an insecure original reopens findings; it never establishes security verification. Pending/ambiguous operations show Needs review and block automated writes. See `docs/SAFE_RECOVERY.md` for API contracts, tests and limits.

@@ -174,5 +174,5 @@ def test_v3_migration_preserves_run_evidence_and_adds_history(tmp_path):
     assert repo.history()[0]['enumeration_complete'] == 1
     assert repo.remediations() == []
     with sqlite3.connect(repo.path) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 4
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 5
         assert db.execute('SELECT evidence FROM scan_evidence').fetchall() == evidence
