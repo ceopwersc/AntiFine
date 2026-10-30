@@ -58,7 +58,7 @@ def export_to_sarif(output_file: str, db_path: Path = DB_PATH) -> int:
         print(f"[error] Could not write SARIF report to {output_file}: {exc}", file=sys.stderr)
         return 1
 
-def generate_sarif(findings: list[dict[str, Any]], *, coverage: list | None = None, remediations: list | None = None) -> dict[str, Any]:
+def generate_sarif(findings: list[dict[str, Any]], *, coverage: list | None = None, remediations: list | None = None, restorations: list | None = None) -> dict[str, Any]:
     """Generate a SARIF JSON object conforming to OASIS SARIF v2.1.0."""
     rules = []
     results = []
@@ -137,7 +137,8 @@ def generate_sarif(findings: list[dict[str, Any]], *, coverage: list | None = No
                     }
                 },
                 "results": results,
-                "properties": {"scan_coverage": coverage or [], 'remediation_history': remediations or [], "compliance_status": "Not evaluated"}
+                "properties": {"scan_coverage": coverage or [], 'remediation_history': remediations or [],
+                    'restoration_history': restorations or [], "compliance_status": "Not evaluated"}
             }
         ]
     }

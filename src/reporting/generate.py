@@ -259,6 +259,15 @@ def render_report(
                         f"approved: {event.get('approved', False)}; original resolved: {event.get('original_resolved', False)}; "
                         f"file verified: {event.get('file_verified', False)}; introduced findings: {event.get('introduced_count', 0)}."]
                 lines.append('')
+            if coverage_db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='restoration_runs'").fetchone():
+                lines += ['## Source restorations', '', 'Restoring original source can reintroduce findings. A restored file is not a verified security remediation.', '']
+                for details, recorded_at in coverage_db.execute('SELECT details,created_at FROM restoration_runs ORDER BY rowid DESC LIMIT 100'):
+                    event = json.loads(details)
+                    lines += [f"- {_escape_cell(recorded_at)}: {_escape_cell(event['status'])}; restoration `{event['restoration_id']}`; "
+                        f"file {_escape_cell(event['file'])}; backup `{event['backup_id']}`; safety backup `{event['pre_restore_backup_id']}`; "
+                        f"scan `{event.get('scan_id', '')}`; findings: {event.get('findings_count')}; "
+                        f"rollback completed: {event.get('rollback_completed', 'not requested')}; security verified: false."]
+                lines.append('')
     if not records:
         lines += [
             "No open findings are recorded. Review scan coverage and remediation evidence before making a security decision.",

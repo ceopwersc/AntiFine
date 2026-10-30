@@ -647,3 +647,16 @@ h1 { font-size: 20px; line-height: 28px; letter-spacing: 0; }
 .history-table .coverage-panel { margin-top: 10px; max-width: 700px; }
 @media (max-width: 900px) { .finding-toolbar .filter-group { width: 100%; } .finding-toolbar select { max-width: 175px; } }
 .workstation-table .rule-id, .workstation-table td > strong { display: block; margin-bottom: 4px; }
+.recovery-warning { display: flex; gap: 10px; margin: 16px 24px; padding: 12px; border: 1px solid var(--border); background: var(--panel); color: #e4bd78; font-size: 12px; }
+.recovery-warning svg { flex-shrink: 0; }
+.recovery-warning p { margin: 0; }
+.recovery-page > .recovery-warning { margin: 0; }
+.recovery-metadata { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 14px 24px; margin: 20px 24px; font-size: 12px; }
+.recovery-metadata dt { color: var(--muted); margin-bottom: 4px; }
+.recovery-metadata dd { margin: 0; overflow-wrap: anywhere; }
+.recovery-metadata p { margin: 5px 0 0; }
+.recovery-metadata code, .recovery-result code { white-space: normal; overflow-wrap: anywhere; font-size: 11px; }
+.recovery-table td { vertical-align: top; }
+.recovery-review { margin: 0 24px 16px; }
+.recovery-result { padding: 16px 24px; font-size: 12px; overflow-wrap: anywhere; }
+@media (max-width: 800px) { .recovery-metadata { grid-template-columns: minmax(0,1fr); } .recovery-modal .modal-footer { flex-wrap: wrap; } }

@@ -87,6 +87,8 @@ from src.api.core_routes import router as core_router
 from src.api.integrations_routes import router as integrations_router
 app.include_router(core_router)
 app.include_router(integrations_router)
+from src.api.recovery_routes import router as recovery_router
+app.include_router(recovery_router)
 app.add_middleware(LocalSecurityMiddleware)
 
 @app.exception_handler(RequestValidationError)

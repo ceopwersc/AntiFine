@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { BackendFinding, ScanResponse, ScanRun, FileCoverage } from './types';
+import type { BackendFinding, ScanResponse, ScanRun, FileCoverage, BackupInspection, RestorePreview, RestoreResult, RestorationEvent } from './types';
 
 const apiClient = axios.create({
   baseURL: '/api',
@@ -175,6 +175,13 @@ export const fetchScanHistory = async () => {
 };
 export const createDemoWorkspace = async (): Promise<{target_path: string}> => (await apiClient.post('/scan/demo')).data;
 export const rescanFinding = async (findingId: string): Promise<ScanResponse> => (await apiClient.post(`/findings/${encodeURIComponent(findingId)}/rescan`)).data;
+
+export const fetchBackups = async (): Promise<{backups: BackupInspection[]}> => (await apiClient.get('/backups')).data;
+export const inspectBackup = async (backupId: string): Promise<BackupInspection> => (await apiClient.get(`/backups/${encodeURIComponent(backupId)}`)).data;
+export const previewRestore = async (backupId: string): Promise<RestorePreview> => (await apiClient.post(`/backups/${encodeURIComponent(backupId)}/restore/preview`)).data;
+export const restoreBackup = async (backupId: string, previewId: string): Promise<RestoreResult> =>
+  (await apiClient.post(`/backups/${encodeURIComponent(backupId)}/restore`, {preview_id: previewId, confirmed: true})).data;
+export const fetchRestorations = async (): Promise<{restorations: RestorationEvent[]}> => (await apiClient.get('/restorations')).data;
 
 export interface FixResult {
   status: string;

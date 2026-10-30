@@ -43,8 +43,9 @@ answers bounded questions.
 A01–A16 remediation is implemented; see `docs/SECURITY_REMEDIATION.md` for the matrix, actual validation and remaining platform/integration limits.
 
 - Security boundaries: authenticated loopback HTTP; explicit Host/Origin checks; private expiring uploads; reparse-safe paths; bounded isolated scanners; DNS-pinned allowlisted webhooks.
-- Findings: explicit rule IDs, opaque file/finding IDs, resource locators, source regions/digests, scan coverage, transactional lifecycle and immutable run evidence (schema v4; immutable approval/verification events).
+- Findings: explicit rule IDs, opaque file/finding IDs, resource locators, source regions/digests, scan coverage, transactional lifecycle and immutable run evidence (schema v5; immutable approval/verification and restoration events).
 - Remediation: only backend finding IDs, current preview IDs and explicit approval authorize exact scalar fixes; immutable private backups; atomic writes; rescan/persistence and rollback. Unsafe generic Docker fixes are manual-only.
+- Recovery: backend-owned backup inspection and explicit restore confirmation; immutable originals/safety copies; version checks, locks, atomic writes and real rescan. Legacy or interrupted ambiguous state is Needs review, never automatic destructive recovery. See `docs/SAFE_RECOVERY.md`.
 - Reporting: stable SARIF identities/regions and private authenticated Markdown evidence; no PDF implementation. Mappings never establish certification.
 - Frontend: typed identities, reloadable persisted findings, split workflow components, visible preview failure, gated Apply, dialog keyboard support and responsive checks.
 - Tests: isolated pytest and real Playwright harnesses exist. CI runs backend/security/CLI checks, frontend lint/typecheck/build and repeated browser workflows.

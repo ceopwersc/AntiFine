@@ -16,6 +16,7 @@ MessageSquareText,
 Play,
 Radar,
 RefreshCw,
+RotateCcw,
 Settings2,
 ShieldAlert,
 ShieldCheck,
@@ -32,6 +33,7 @@ import { useFindings } from './hooks/useFindings';
 import {FindingsPanel} from './components/FindingsPanel';
 import {FindingDrawer} from './components/FindingDrawer';
 import {CoveragePanel} from './components/CoveragePanel';
+import {RecoveryPage} from './components/RecoveryPage';
 import type { Page } from './types';
 import { type Finding,type Severity } from './types';
 const navGroups = [
@@ -54,6 +56,7 @@ const navGroups = [
     label: 'Activity',
     items: [
       { id: 'history' as Page, label: 'Scan history', icon: Clock3 },
+      { id: 'recovery' as Page, label: 'Recovery', icon: RotateCcw },
       { id: 'reports' as Page, label: 'Reports', icon: FileText },
     ],
   },
@@ -200,7 +203,7 @@ function CompliancePage({ findings }: { findings: Finding[] }) {
 }
 
 export default function App() {
-  const [page, setPage] = useState<Page>(() => { const stored = sessionStorage.getItem('antifine-page'); return ['overview','scan','findings','compliance','secrets','history','reports','ai','settings'].includes(stored ?? '') ? stored as Page : 'overview'; });
+  const [page, setPage] = useState<Page>(() => { const stored = sessionStorage.getItem('antifine-page'); return ['overview','scan','findings','compliance','secrets','history','recovery','reports','ai','settings'].includes(stored ?? '') ? stored as Page : 'overview'; });
   useEffect(() => { sessionStorage.setItem('antifine-page', page); }, [page]);
   const { findings, setFindings, reloadFindings, findingError, coverage, latestScan, loading } = useFindings();
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
@@ -233,5 +236,5 @@ export default function App() {
   };
   const completeScan = async (nextFindings: Finding[]) => { setFindings(nextFindings); setPage('findings'); await reloadFindings(); };
   const markApplied = () => { sessionStorage.removeItem('antifine-selected'); void reloadFindings(); setSelectedFinding(null); };
-  return <AppShell page={page} setPage={(nextPage) => { if (nextPage !== 'ai') { setAssistantContext(undefined); setAssistantQuestion(''); } setPage(nextPage); }}>{findingError && <div className="modal-callout-error" role="alert">{findingError}<button className="button button-secondary" onClick={() => void reloadFindings()}>Retry loading evidence</button></div>}{loading && <p role="status">Loading persisted evidence…</p>}<p className="coverage-notice" role="status">{coverage}</p>{page === 'findings' && latestScan && <CoveragePanel coverage={latestScan.coverage} scanId={latestScan.id} status={latestScan.status}/>}<AnimatePresence mode="wait"><motion.div key={page} className="page-transition" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.16 }}>{page === 'overview' && <Overview findings={findings} onNavigate={setPage} onSelect={selectFinding} />}{page === 'scan' && <ScanWorkspace onComplete={completeScan} onViewFindings={() => setPage('findings')} onOpenFinding={selectFinding} target={target} setTarget={setTarget} />}{page === 'findings' && <FindingsPanel findings={findings} onSelect={selectFinding} />}{page === 'compliance' && <CompliancePage findings={findings} />}{page === 'secrets' && <SecretsPage />}{page === 'history' && <HistoryPage />}{page === 'reports' && <ReportsPage />}{page === 'ai' && <AskAntiFinePage context={assistantContext} initialQuestion={assistantQuestion} onClearContext={() => { setAssistantContext(undefined); setAssistantQuestion(''); }} onNewChat={() => { setAssistantContext(undefined); setAssistantQuestion(''); }} />}{page === 'settings' && <SettingsPage onNavigate={setPage} />}</motion.div></AnimatePresence><AnimatePresence>{selectedFinding && !remediationFinding && <FindingDrawer finding={selectedFinding} onClose={() => { sessionStorage.removeItem('antifine-selected'); setSelectedFinding(null); }} onRemediate={() => setRemediationFinding(selectedFinding)} onAsk={() => askAboutFinding(selectedFinding)} explanationCache={explanationCache} onExplanation={(id, result) => setExplanationCache((current) => ({ ...current, [id]: result }))} />}{remediationFinding && <RemediationModal key={remediationFinding.id} finding={remediationFinding} onClose={() => setRemediationFinding(null)} onApplied={markApplied} />}</AnimatePresence></AppShell>;
+  return <AppShell page={page} setPage={(nextPage) => { if (nextPage !== 'ai') { setAssistantContext(undefined); setAssistantQuestion(''); } setPage(nextPage); }}>{findingError && <div className="modal-callout-error" role="alert">{findingError}<button className="button button-secondary" onClick={() => void reloadFindings()}>Retry loading evidence</button></div>}{loading && <p role="status">Loading persisted evidence…</p>}<p className="coverage-notice" role="status">{coverage}</p>{page === 'findings' && latestScan && <CoveragePanel coverage={latestScan.coverage} scanId={latestScan.id} status={latestScan.status}/>}<AnimatePresence mode="wait"><motion.div key={page} className="page-transition" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.16 }}>{page === 'overview' && <Overview findings={findings} onNavigate={setPage} onSelect={selectFinding} />}{page === 'scan' && <ScanWorkspace onComplete={completeScan} onViewFindings={() => setPage('findings')} onOpenFinding={selectFinding} target={target} setTarget={setTarget} />}{page === 'findings' && <FindingsPanel findings={findings} onSelect={selectFinding} />}{page === 'compliance' && <CompliancePage findings={findings} />}{page === 'secrets' && <SecretsPage />}{page === 'history' && <HistoryPage />}{page === 'recovery' && <RecoveryPage onRestored={markApplied} />}{page === 'reports' && <ReportsPage />}{page === 'ai' && <AskAntiFinePage context={assistantContext} initialQuestion={assistantQuestion} onClearContext={() => { setAssistantContext(undefined); setAssistantQuestion(''); }} onNewChat={() => { setAssistantContext(undefined); setAssistantQuestion(''); }} />}{page === 'settings' && <SettingsPage onNavigate={setPage} />}</motion.div></AnimatePresence><AnimatePresence>{selectedFinding && !remediationFinding && <FindingDrawer finding={selectedFinding} onClose={() => { sessionStorage.removeItem('antifine-selected'); setSelectedFinding(null); }} onRemediate={() => setRemediationFinding(selectedFinding)} onAsk={() => askAboutFinding(selectedFinding)} explanationCache={explanationCache} onExplanation={(id, result) => setExplanationCache((current) => ({ ...current, [id]: result }))} />}{remediationFinding && <RemediationModal key={remediationFinding.id} finding={remediationFinding} onClose={() => setRemediationFinding(null)} onApplied={markApplied} />}</AnimatePresence></AppShell>;
 }

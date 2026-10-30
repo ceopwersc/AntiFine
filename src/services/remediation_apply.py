@@ -2,7 +2,6 @@
 from dataclasses import asdict
 import hashlib
 import json
-import os
 import time
 import uuid
 
@@ -14,6 +13,7 @@ from src.services.scan_worker import isolated_file
 from src.services.scanning import scan_target
 from src.services.settings import data_root
 from src.services.remediation_service import _finding, atomic_write
+from src.services.backup_store import create_backup, root_identity
 
 
 def identifier() -> str:
@@ -37,6 +37,8 @@ def apply(repository: ScanRepository, finding_id: str, preview_id: str, *, appro
     if record.get('finding_id') != finding_id or record.get('expires', 0) < time.time():
         raise RemediationError('Preview does not authorize this finding')
     metadata, root, path, original, updated, _, _, action = _finding(repository, finding_id)
+    if repository.has_pending_file(metadata['file_id'], metadata['workspace_id']):
+        raise RemediationError('An interrupted operation on this file needs review')
     updated_digest = hashlib.sha256(updated).hexdigest()
     if record.get('digest') != metadata['source_digest'] or record.get('after_digest') != updated_digest:
         raise RemediationError('Stale or changed candidate')
@@ -47,27 +49,19 @@ def apply(repository: ScanRepository, finding_id: str, preview_id: str, *, appro
         lock = lock_path.open('x')
     except FileExistsError:
         raise RemediationError('Another remediation owns this file') from None
-    backup_id, operation_id = identifier(), identifier()
-    backups = data_root() / 'backups'
-    backups.mkdir(exist_ok=True, mode=0o700)
+    backup_id, operation_id = '', identifier()
     event = {'id': identifier(), 'operation_id': operation_id, 'finding_id': finding_id,
         'preview_id': preview_id, 'approved': True, 'status': 'verification_pending',
         'file': metadata['file'], 'file_id': metadata['file_id'], 'rule_id': metadata['rule_id'],
         'resource_label': metadata['resource_label'], 'backup_id': backup_id,
         'source_digest': record['digest'], 'after_digest': updated_digest, 'scan_id': '',
+        'workspace_id': metadata['workspace_id'], 'root_id': root_identity(root),
         'file_verified': False, 'original_resolved': False, 'introduced_count': 0, 'remaining_count': None}
     wrote = False
     pending = False
     try:
-        if sum(item.stat().st_size for item in backups.glob('*.bak')) + len(original) > 128 * 1024 * 1024:
-            raise RemediationError('Backup quota reached; archive recoverable backups before applying more fixes')
-        with (backups / (backup_id + '.bak')).open('xb') as backup:
-            os.chmod(backup.name, 0o600)
-            backup.write(original)
-            backup.flush()
-            os.fsync(backup.fileno())
-        if (backups / (backup_id + '.bak')).read_bytes() != original:
-            raise RemediationError('Backup verification failed')
+        backup_id = create_backup(original)
+        event['backup_id'] = backup_id
         repository.record_remediation(event)
         pending = True
         atomic_write(root, path, updated, record['digest'])
